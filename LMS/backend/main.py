@@ -7,6 +7,7 @@ from models import User, Course, Enrollment, Assignment, Submission
 from schemas import Register, Login, CourseCreate, EnrollmentCreate
 from auth import get_user
 from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
+from mongodb import mongo_db
 
 Base.metadata.create_all(bind=engine)
 
@@ -317,3 +318,39 @@ def my_marks(
     return db.query(Submission).filter(
         Submission.student_id == user["id"]
     ).all()
+    
+@app.post("/courses/{course_id}/resources")
+def add_resource(
+    course_id: int,
+    title: str,
+    content: str,
+    user=Depends(get_user)
+):
+    if user["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Teacher access only")
+
+    resource = {
+        "course_id": course_id,
+        "title": title,
+        "content": content,
+        "teacher_id": user["id"]
+    }
+
+    result = mongo_db.resources.insert_one(resource)
+
+    return {
+        "message": "Resource added",
+        "id": str(result.inserted_id)
+    }
+
+
+@app.get("/courses/{course_id}/resources")
+def get_resources(course_id: int):
+    resources = list(
+        mongo_db.resources.find(
+            {"course_id": course_id},
+            {"_id": 0}
+        )
+    )
+
+    return resources
