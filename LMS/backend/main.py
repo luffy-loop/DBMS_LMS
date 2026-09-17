@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
@@ -12,6 +13,13 @@ from mongodb import mongo_db
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="LMS")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 key = "lms-secret-key"
@@ -24,20 +32,19 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 @app.post("/register")
 def register(data: Register, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email).first()
+    user = db.query(User).filter(User.email == data.roll_no).first()
 
     if user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Roll number already registered")
 
     if data.role not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role")
 
     user = User(
         name=data.name,
-        email=data.email,
+        email=data.roll_no,
         password=pwd.hash(data.password),
         role=data.role
     )
@@ -54,16 +61,13 @@ def register(data: Register, db: Session = Depends(get_db)):
 
 @app.post("/login")
 def login(data: Login, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email).first()
+    user = db.query(User).filter(User.email == data.roll_no).first()
 
     if not user or not pwd.verify(data.password, user.password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid roll number or password")
 
     token = jwt.encode(
-        {
-            "id": user.id,
-            "role": user.role
-        },
+        {"id": user.id, "role": user.role},
         key,
         algorithm=alg
     )

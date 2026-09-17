@@ -1,27 +1,26 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 class Register(BaseModel):
     name: str
-    email: EmailStr
+    roll_no: str
     password: str
     role: str
 
 class Login(BaseModel):
-    email: EmailStr
+    roll_no: str
     password: str
-    
+
 class CourseCreate(BaseModel):
     title: str
     description: str
-    
+
 class EnrollmentCreate(BaseModel):
     course_id: int
-    
+
 class AssignmentCreate(BaseModel):
     title: str
     description: str
     course_id: int
-
 
 class SubmissionCreate(BaseModel):
     assignment_id: int
