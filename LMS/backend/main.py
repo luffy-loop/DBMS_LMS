@@ -12,7 +12,7 @@ from bson import ObjectId
 from database import Base, engine, get_db
 from models import User, Course, Enrollment, Assignment, Submission
 from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
-from auth import get_user
+from auth import get_user, key, alg
 from mongodb import mongo_db
 from vector_store import search_resources
 from learning_insights import router as learning_router
@@ -83,6 +83,18 @@ def teacher(user=Depends(get_user)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
     return {"message": "Welcome Teacher", "user": user["id"]}
+
+@app.get("/teacher/overview")
+def teacher_overview(user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Teacher access only")
+    courses = db.query(Course).filter(Course.teacher_id == user["id"]).all()
+    course_ids = [c.id for c in courses]
+    assessments = db.query(Assignment).filter(Assignment.teacher_id == user["id"]).count()
+    submissions = db.query(Submission).filter(Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
+    pending = db.query(Submission).filter(Submission.marks == None, Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
+    pdfs = mongo_db.resources.count_documents({"teacher_id": user["id"], "assignment_id": {"$exists": False}})
+    return {"courses": len(course_ids), "assessments": assessments, "course_pdfs": pdfs, "submissions": submissions, "pending_grading": pending}
 
 @app.get("/admin")
 def admin(user=Depends(get_user)):
