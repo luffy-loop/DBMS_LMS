@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, Sparkles } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-const API="http://127.0.0.1:8000"
+import { API } from "../config"
 type Result={title:string;content:string;type:string;course_id:number;distance:number}
 export default function AISearch(){
  const navigate=useNavigate(),[query,setQuery]=useState(""),[results,setResults]=useState<Result[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState("")
