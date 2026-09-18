@@ -60,7 +60,7 @@ export default function Marks() {
         <button onClick={() => navigate(role === "teacher" ? "/teacher" : "/courses")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><BookOpen size={18}/>My Courses</button>
         <button onClick={() => navigate("/assignments")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><ClipboardList size={18}/>Assignments</button>
         <button className="flex w-full items-center gap-3 rounded-xl bg-white/10 px-4 py-3 text-sm"><Award size={18}/>{role === "teacher" ? "Student Marks" : "Marks"}</button>
-        <button className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><Search size={18}/>AI Search</button>
+        <button onClick={() => navigate("/search")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><Search size={18}/>AI Search</button>
       </nav>
       <button onClick={logout} className="absolute bottom-6 left-5 right-5 flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><LogOut size={18}/>Logout</button>
     </aside>
