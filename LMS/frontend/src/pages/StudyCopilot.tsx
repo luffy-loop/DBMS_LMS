@@ -2,8 +2,7 @@ import { useState } from "react"
 import type { FormEvent } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, Sparkles, ArrowRight, BrainCircuit } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-
-const API = "http://127.0.0.1:8000"
+import { API } from "../config"
 
 type Source = { title:string; type:string; course_id:number; distance:number }
 type Response = { answer:string; confidence:string; sources:Source[] }
