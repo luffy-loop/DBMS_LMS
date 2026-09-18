@@ -426,7 +426,9 @@ function InsightMetric({label,value,detail}:{label:string;value:string;detail:st
     <p className="text-xs uppercase tracking-wider text-white/30">{label}</p>
     <p className="mt-2 text-xl font-semibold">{value}</p>
     <p className="mt-1 text-xs text-white/35">{detail}</p>
-  </div>
+  
+    <MobileNav role={"student"} active="dashboard" />
+</div>
 }
 
 function StatCard({
@@ -493,7 +495,6 @@ function RolePlaceholder({
 
       </div>
     </div>
-    <MobileNav role={"student"} active="dashboard" />
   </div>
   )
 }
