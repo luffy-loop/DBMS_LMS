@@ -249,3 +249,21 @@ select option{background:#101522;color:#fff}
 .lms-auth input:focus,.lms-auth select:focus{border-color:rgba(167,139,250,.65);background:rgba(255,255,255,.065);box-shadow:0 0 0 4px rgba(139,92,246,.10)}
 .lms-input[type="datetime-local"],.lms-input[type="date"],.lms-input[type="time"]{color-scheme:dark}
 .lms-input[type="datetime-local"]::-webkit-calendar-picker-indicator,.lms-input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.65;cursor:pointer}
+
+
+.input{width:100%;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:#fff;border-radius:.9rem;padding:.82rem 1rem;outline:none;transition:border-color .2s ease,box-shadow .2s ease,background .2s ease}
+.input:focus{border-color:rgba(167,139,250,.65);background:rgba(255,255,255,.065);box-shadow:0 0 0 4px rgba(139,92,246,.10)}
+.input::placeholder{color:rgba(255,255,255,.24)}
+.lms-date-wrap{position:relative}
+.lms-date-display{display:flex;width:100%;align-items:center;justify-content:space-between;gap:.75rem;border:1px solid rgba(255,255,255,.10);border-radius:.9rem;background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.025));padding:.78rem 1rem;text-align:left;color:rgba(255,255,255,.72);transition:.2s ease}
+.lms-date-display:hover{border-color:rgba(167,139,250,.35);background:rgba(139,92,246,.07)}
+.lms-date-display:focus-visible{outline:none;box-shadow:0 0 0 4px rgba(139,92,246,.12);border-color:rgba(167,139,250,.6)}
+.lms-date-icon{display:flex;height:30px;width:30px;align-items:center;justify-content:center;border-radius:.65rem;background:linear-gradient(135deg,rgba(139,92,246,.22),rgba(34,211,238,.10));color:#c4b5fd}
+.lms-date-native{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
+.lms-date-clear{position:absolute;right:3.3rem;top:50%;transform:translateY(-50%);font-size:1.15rem;color:rgba(255,255,255,.35);transition:.2s ease}
+.lms-date-clear:hover{color:#fff}
+.lms-upload-zone{display:flex;min-height:66px;align-items:center;gap:1rem;border:1px dashed rgba(167,139,250,.22);border-radius:1rem;background:linear-gradient(145deg,rgba(139,92,246,.06),rgba(255,255,255,.025));padding:.75rem;cursor:pointer;transition:.2s ease}
+.lms-upload-zone:hover{border-color:rgba(167,139,250,.5);background:linear-gradient(145deg,rgba(139,92,246,.10),rgba(34,211,238,.035));transform:translateY(-1px)}
+.lms-upload-button{display:inline-flex;align-items:center;gap:.5rem;border-radius:.75rem;background:linear-gradient(135deg,#8b5cf6,#4f46e5);padding:.65rem .9rem;font-size:.82rem;font-weight:600;color:#fff;box-shadow:0 8px 24px rgba(109,40,217,.20)}
+.lms-upload-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem;color:rgba(255,255,255,.45)}
+.lms-file{cursor:pointer}
