@@ -8,6 +8,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False, index=True)
     password = Column(String, nullable=False)
     role = Column(String, nullable=False)
+    section = Column(String, nullable=False, default="Unassigned")
 
 class Course(Base):
     __tablename__ = "courses"
