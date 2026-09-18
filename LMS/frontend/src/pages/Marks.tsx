@@ -14,7 +14,7 @@ export default function Marks() {
   const [marks, setMarks] = useState<Record<number, string>>({})
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
-  const role = localStorage.getItem("role")
+const role = localStorage.getItem("role") || "student"
   const name = localStorage.getItem("name") || "User"
 
   useEffect(() => {
