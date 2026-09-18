@@ -89,6 +89,7 @@ export default function Marks() {
           {role === "teacher" && submission.marks === null && <div className="mt-5 flex gap-3"><input type="number" min="0" max="100" value={marks[submission.id] || ""} onChange={(e) => setMarks((current) => ({ ...current, [submission.id]: e.target.value }))} placeholder="Enter marks" className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-white/30"/><button onClick={() => giveMarks(submission.id)} className="rounded-xl bg-white px-6 py-3 text-sm font-medium text-black hover:bg-white/90">Give Marks</button></div>}</div>)}</div>}
       </section>
     </main>
-    <MobileNav role={role} active="marks />
+    
+      <MobileNav role={role} active="marks" />
   </div>
 }
