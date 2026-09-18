@@ -20,8 +20,17 @@ export default function Admin(){
   }catch(e){setError(e instanceof Error?e.message:"Unable to assign section")}
   finally{setSaving(null)}
  }
- useEffect(()=>{const token=localStorage.getItem("token");if(!token){navigate("/login");return}if(localStorage.getItem("role")!=="admin"){navigate("/dashboard");return}
- Promise.all([fetch(`${API}/admin/overview`,{headers:{Authorization:`Bearer ${token}`}}),fetch(`${API}/admin/users`,{headers:{Authorization:`Bearer ${token}`}})]).then(async([a,b])=>{const ad=await a.json(),bd=await b.json();if(!a.ok)throw new Error(ad.detail||"Failed to load admin data");if(!b.ok)throw new Error(bd.detail||"Failed to load users");setOverview(ad);setUsers(bd)}).catch(e=>setError(e instanceof Error?e.message:"Failed to load admin data")).finally(()=>setLoading(false))},[navigate])
+ async function loadAdminData(token:string){
+  const headers={Authorization:`Bearer ${token}`}
+  const [overviewRes,usersRes]=await Promise.all([fetch(`${API}/admin/overview`,{headers}),fetch(`${API}/admin/users`,{headers})])
+  const failures:string[]=[]
+  if(overviewRes.ok){setOverview(await overviewRes.json())}else{const d=await overviewRes.json().catch(()=>({}));if(overviewRes.status===401){localStorage.clear();navigate("/login");return}failures.push(d.detail||"Could not load system overview")}
+  if(usersRes.ok){setUsers(await usersRes.json())}else{const d=await usersRes.json().catch(()=>({}));if(usersRes.status===401){localStorage.clear();navigate("/login");return}failures.push(d.detail||"Could not load registered users")}
+  setError(failures.join(" · "))
+  setLoading(false)
+ }
+
+ useEffect(()=>{const token=localStorage.getItem("token");if(!token){navigate("/login");return}if(localStorage.getItem("role")!=="admin"){navigate("/dashboard");return}loadAdminData(token)},[navigate])
  function logout(){localStorage.clear();navigate("/login")}
  return <div className="min-h-screen bg-[#070b14] text-white"><aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-white/10 bg-[#0b101a] p-5 lg:block"><div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Admin Console</p></div></div><nav className="mt-8 space-y-2"><button className="flex w-full items-center gap-3 rounded-xl bg-white/10 px-4 py-3 text-sm"><LayoutDashboard size={18}/>Dashboard</button><button onClick={()=>navigate("/search")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><Search size={18}/>AI Search</button></nav><button onClick={logout} className="absolute bottom-6 left-5 right-5 flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"><LogOut size={18}/>Logout</button></aside>
  <main className="lg:ml-64"><header className="flex items-center justify-between border-b border-white/10 px-6 py-5 lg:px-10"><div><p className="text-sm text-white/40">Admin Dashboard</p><h2 className="mt-1 text-2xl font-semibold">System Overview</h2></div><div className="flex items-center gap-3"><span className="hidden text-sm text-white/40 sm:block">{name}</span><button onClick={()=>navigate("/profile")} className="lms-profile-trigger flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5" aria-label="Open profile"><User size={18}/></button></div></header>
