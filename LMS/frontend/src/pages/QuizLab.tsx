@@ -1,8 +1,8 @@
 import { useState } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, BrainCircuit, Sparkles, RotateCcw, CheckCircle2, XCircle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { API } from "../config"
 
-const API = "http://127.0.0.1:8000"
 
 type Q={id:number;question:string;context:string;options:string[];answer:string;source:string}
 
