@@ -25,6 +25,7 @@ class AssignmentCreate(BaseModel):
     type: str = "assignment"
     start_time: datetime | None = None
     end_time: datetime | None = None
+    duration_minutes: int | None = None
 
 class SubmissionCreate(BaseModel):
     assignment_id: int

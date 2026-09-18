@@ -32,6 +32,7 @@ class Assignment(Base):
     type = Column(String, nullable=False, default="assignment")
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
 
 class Submission(Base):
     __tablename__ = "submissions"

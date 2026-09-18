@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from io import BytesIO
+from pypdf import PdfReader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -20,6 +22,7 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS type VARCHAR DEFAULT 'assignment'"))
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS start_time TIMESTAMP"))
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP"))
+    conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER"))
 
 app = FastAPI(title="LMS")
 app.add_middleware(
@@ -125,20 +128,56 @@ def create_assignment(data: AssignmentCreate, user=Depends(get_user), db: Sessio
         raise HTTPException(status_code=400, detail="Invalid assessment type")
     if data.start_time and data.end_time and data.end_time <= data.start_time:
         raise HTTPException(status_code=400, detail="End time must be after start time")
+    if data.duration_minutes is not None and data.duration_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Duration must be greater than zero")
+    if data.duration_minutes and not data.start_time:
+        raise HTTPException(status_code=400, detail="Start time is required when duration is set")
     course = db.query(Course).filter(Course.id == data.course_id, Course.teacher_id == user["id"]).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    assignment = Assignment(title=data.title, description=data.description, course_id=course.id, teacher_id=user["id"], type=data.type, start_time=data.start_time, end_time=data.end_time)
+    assignment = Assignment(title=data.title, description=data.description, course_id=course.id, teacher_id=user["id"], type=data.type, start_time=data.start_time, end_time=data.end_time, duration_minutes=data.duration_minutes)
     db.add(assignment)
     db.commit()
     db.refresh(assignment)
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
 
+def assessment_deadline(assignment):
+    deadlines = []
+    if assignment.end_time:
+        deadlines.append(assignment.end_time)
+    if assignment.start_time and assignment.duration_minutes:
+        deadlines.append(assignment.start_time + timedelta(minutes=assignment.duration_minutes))
+    return min(deadlines) if deadlines else None
+
+def assessment_status(assignment):
+    now = datetime.now()
+    if assignment.start_time and now < assignment.start_time:
+        return "upcoming"
+    deadline = assessment_deadline(assignment)
+    if deadline and now >= deadline:
+        return "closed"
+    return "open"
+
+def assessment_payload(assignment):
+    return {
+        "id": assignment.id,
+        "title": assignment.title,
+        "description": assignment.description,
+        "course_id": assignment.course_id,
+        "teacher_id": assignment.teacher_id,
+        "type": assignment.type,
+        "start_time": assignment.start_time,
+        "end_time": assignment.end_time,
+        "duration_minutes": assignment.duration_minutes,
+        "deadline": assessment_deadline(assignment),
+        "status": assessment_status(assignment)
+    }
+
 @app.get("/assignments/{course_id}")
 def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    return db.query(Assignment).filter(Assignment.course_id == course_id).all()
+    return [assessment_payload(a) for a in db.query(Assignment).filter(Assignment.course_id == course_id).all()]
 
 @app.post("/submissions")
 def submit_assignment(data: SubmissionCreate, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -150,7 +189,8 @@ def submit_assignment(data: SubmissionCreate, user=Depends(get_user), db: Sessio
     now = datetime.now()
     if assignment.start_time and now < assignment.start_time:
         raise HTTPException(status_code=400, detail="This assessment is not open yet")
-    if assignment.end_time and now > assignment.end_time:
+    deadline = assessment_deadline(assignment)
+    if deadline and now >= deadline:
         raise HTTPException(status_code=400, detail="Submission deadline has passed")
     old = db.query(Submission).filter(Submission.assignment_id == assignment.id, Submission.student_id == user["id"]).first()
     if old:
@@ -208,7 +248,14 @@ async def add_resource(course_id: int, file: UploadFile = File(...), title: str 
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty PDF file")
-    result = mongo_db.resources.insert_one({"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": "", "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()})
+
+    try:
+        reader = PdfReader(BytesIO(data))
+        content = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    except Exception:
+        content = ""
+
+    result = mongo_db.resources.insert_one({"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": content, "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()})
     return {"message": "PDF uploaded", "id": str(result.inserted_id), "title": title}
 
 @app.get("/courses/{course_id}/resources")
