@@ -1,7 +1,7 @@
 import {useEffect,useState} from "react"
 import {BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,User,BarChart3,Clock3,CheckCircle2,TrendingUp} from "lucide-react"
 import {useNavigate} from "react-router-dom"
-const API="http://127.0.0.1:8000"
+import { API } from "../config"
 type R={id:number;title:string;assessments:number;submissions:number;graded:number;pending:number;average:number|null}
 type D={courses:number;assessments:number;submissions:number;graded:number;pending_grading:number;average_marks:number|null;grading_rate:number;course_stats:R[];focus_course:string|null}
 export default function TeacherInsights(){
