@@ -155,19 +155,20 @@ export default function TeacherDashboard() {
           </button>
 
           <button
-            onClick={() => setShowForm(true)}
+            onClick={() => navigate("/teacher")}
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"
-          >
+            >
             <BookOpen size={18} />
             My Courses
-          </button>
+            </button>
 
-          <button
+            <button
+            onClick={() => navigate("/assignments")}
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"
-          >
+            >
             <ClipboardList size={18} />
             Assignments
-          </button>
+            </button>
 
           <button
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"
