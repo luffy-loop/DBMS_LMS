@@ -97,6 +97,19 @@ export default function TeacherDashboard(){
   finally{setBusy(false)}
  }
 
+ function pickFile(e:React.ChangeEvent<HTMLInputElement>){
+  const f=e.target.files?.[0]||null
+  if(!f){setFile(null);return}
+  if(f.type!=="application/pdf"&&!f.name.toLowerCase().endsWith(".pdf")){
+   setFile(null)
+   setError("Please select a PDF file")
+   e.currentTarget.value=""
+   return
+  }
+  setError("")
+  setFile(f)
+ }
+
  function logout(){localStorage.clear();navigate("/login")}
  function scrollCourses(){document.getElementById("teacher-courses")?.scrollIntoView({behavior:"smooth",block:"start"})}
 
