@@ -293,3 +293,10 @@ select option{background:#101522;color:#fff}
  .lms-date-display{min-height:48px}
  .lms-upload-zone{min-height:62px}
 }
+
+
+@media (min-width:1024px){
+  .lms-sidebar{overflow-y:auto;scrollbar-width:thin}
+  .lms-sidebar>nav{padding-bottom:5rem}
+  .lms-sidebar>.lms-nav.absolute{position:sticky;bottom:0;margin-top:auto;background:rgba(9,13,24,.96);backdrop-filter:blur(14px)}
+}

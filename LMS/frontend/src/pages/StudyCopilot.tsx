@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { API } from "../config"
 
 type Source = { title:string; type:string; course_id:number; distance:number }
-type Response = { answer:string; confidence:string; sources:Source[] }
+type Response = { answer:string; confidence:string; sources:Source[]; mode?:string }
 
 export default function StudyCopilot(){
   const navigate=useNavigate()
@@ -70,8 +70,8 @@ export default function StudyCopilot(){
             <div className="lms-card rounded-3xl p-7">
               <div className="flex items-center justify-between gap-4"><div className="flex items-center gap-2 text-violet-300"><BrainCircuit size={18}/><span className="text-sm font-medium">Copilot answer</span></div><span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/45">{response.confidence} confidence</span></div>
               <div className="mt-6 whitespace-pre-line text-[15px] leading-8 text-white/75">{response.answer}</div>
-              <div className="mt-7 rounded-2xl border border-violet-400/10 bg-violet-400/[.04] p-4 text-sm text-white/45">This answer is grounded in indexed LMS materials. Open AI Search to explore the retrieved resources in more detail.</div>
-              <button onClick={()=>navigate("/search")} className="lms-btn-secondary mt-5 rounded-xl px-4 py-2.5 text-sm">Explore sources <ArrowRight size={15}/></button>
+              <div className="mt-7 rounded-2xl border border-violet-400/10 bg-violet-400/[.04] p-4 text-sm text-white/45">{response.sources.length>0?"This answer is grounded in indexed LMS materials. Open AI Search to explore the retrieved resources in more detail.":response.mode==="study knowledge"?"This answer comes from the LMS study knowledge base. No matching course resource was needed.":"No matching course resource was found, so this answer is not grounded in an uploaded course PDF yet."}</div>
+              {response.sources.length>0&&<button onClick={()=>navigate("/search")} className="lms-btn-secondary mt-5 rounded-xl px-4 py-2.5 text-sm">Explore sources <ArrowRight size={15}/></button>}
             </div>
             <div className="lms-card rounded-3xl p-6">
               <p className="text-sm font-medium">Retrieved sources</p><p className="mt-1 text-xs text-white/35">{response.sources.length} relevant resource{response.sources.length===1?"":"s"} found</p>
