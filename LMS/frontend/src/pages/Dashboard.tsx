@@ -92,7 +92,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#070b14] text-white">
 
-      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-white/10 bg-[#0b101a] p-5 lg:block">
+      <aside className="lms-sidebar fixed left-0 top-0 hidden h-screen w-64 border-r p-5 lg:block">
 
         <div className="flex items-center gap-3 px-3 py-4">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black">
@@ -175,7 +175,7 @@ export default function Dashboard() {
 
         </header>
 
-        <section className="p-6 lg:p-10">
+        <section className="lms-grid min-h-[calc(100vh-90px)] p-6 lg:p-10">
 
           {role === "student" && (
             <>
@@ -210,7 +210,7 @@ export default function Dashboard() {
 
               </div>
 
-              <div className="mt-10">
+              <div className="lms-hero mt-8 rounded-3xl p-6 lg:p-8"><div className="relative z-[1] flex flex-col gap-6 md:flex-row md:items-end md:justify-between"><div><p className="text-sm font-medium text-violet-300">Personal learning space</p><h3 className="mt-2 text-2xl font-semibold tracking-tight">Keep your learning momentum.</h3><p className="mt-2 max-w-xl text-sm leading-6 text-white/45">Your courses, submissions and progress are collected here so you always know what to work on next.</p></div><button onClick={() => navigate("/search")} className="lms-btn-primary rounded-xl px-4 py-3 text-sm font-medium"><Search size={16}/>Ask AI Search</button></div></div><div className="mt-10">
 
                 <div className="mb-5 flex items-center justify-between">
                   <div>
@@ -225,11 +225,11 @@ export default function Dashboard() {
                 </div>
 
                 {loading ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-white/40">
+                  <div className="lms-empty rounded-2xl p-8 text-center text-white/40">
                     Loading courses...
                   </div>
                 ) : courses.length === 0 ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center">
+                  <div className="lms-empty rounded-2xl p-8 text-center">
                     <BookOpen
                       className="mx-auto mb-3 text-white/30"
                       size={30}
@@ -249,10 +249,10 @@ export default function Dashboard() {
                     {courses.map((course) => (
                       <div
                         key={course.id}
-                        className="rounded-2xl border border-white/10 bg-white/[0.035] p-6 transition hover:border-white/20 hover:bg-white/[0.05]"
+                        className="lms-card rounded-2xl p-6"
                       >
 
-                        <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-white/10">
+                        <div className="lms-icon mb-5 flex h-11 w-11 items-center justify-center rounded-xl">
                           <BookOpen size={20} />
                         </div>
 
@@ -264,7 +264,7 @@ export default function Dashboard() {
                           {course.description}
                         </p>
 
-                        <button className="mt-5 text-sm text-white/70 hover:text-white">
+                        <button className="mt-5 text-sm font-medium text-violet-300 transition hover:text-white">
                           View Course →
                         </button>
 
@@ -286,7 +286,7 @@ export default function Dashboard() {
                   Track your assignment submissions and marks
                 </p>
 
-                <div className="mt-5 overflow-hidden rounded-2xl border border-white/10">
+                <div className="lms-card mt-5 overflow-hidden rounded-2xl">
 
                   {submissions.length === 0 ? (
                     <div className="p-8 text-center text-white/40">
@@ -371,9 +371,9 @@ function StatCard({
   value: number
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+    <div className="lms-stat rounded-2xl p-5">
 
-      <div className="mb-5 flex h-10 w-10 items-center justify-center rounded-xl bg-white/10">
+      <div className="lms-icon mb-5 flex h-10 w-10 items-center justify-center rounded-xl">
         {icon}
       </div>
 
@@ -397,7 +397,7 @@ function RolePlaceholder({
   description: string
 }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-10">
+    <div className="lms-card rounded-3xl p-10">
       <h3 className="text-2xl font-semibold">
         {title}
       </h3>
