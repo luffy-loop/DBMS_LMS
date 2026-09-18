@@ -228,3 +228,24 @@ select option{background:#101522;color:#fff}
 @keyframes lms-shimmer{to{background-position:-200% 0}}
 @keyframes lms-fade{from{opacity:0}to{opacity:1}}
 @keyframes lms-modal-in{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+
+.lms-profile-trigger{transition:transform .2s ease,border-color .2s ease,background .2s ease,box-shadow .2s ease}
+.lms-profile-trigger:hover{transform:translateY(-1px) scale(1.03);border-color:rgba(167,139,250,.35);background:rgba(139,92,246,.10);box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.profile-hero{background:radial-gradient(circle at 82% 20%,rgba(34,211,238,.12),transparent 18rem),radial-gradient(circle at 25% 110%,rgba(139,92,246,.16),transparent 22rem),linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.02))}
+.profile-avatar{border:1px solid rgba(196,181,253,.22);background:linear-gradient(135deg,rgba(139,92,246,.38),rgba(34,211,238,.18));box-shadow:0 14px 45px rgba(124,58,237,.16)}
+.profile-role{border:1px solid rgba(167,139,250,.2);background:rgba(139,92,246,.10);border-radius:999px;padding:.3rem .65rem;font-size:.68rem;text-transform:uppercase;letter-spacing:.12em;color:#c4b5fd}
+.profile-role-card{display:flex;align-items:center;gap:.8rem;border:1px solid rgba(255,255,255,.08);border-radius:1rem;padding:.8rem 1rem;background:rgba(255,255,255,.035)}
+.profile-assessment{transition:transform .2s ease,border-color .2s ease,background .2s ease}
+.profile-assessment:hover{transform:translateX(2px);border-color:rgba(167,139,250,.22);background:rgba(255,255,255,.045)}
+.profile-date{display:flex;min-width:52px;height:52px;flex-direction:column;align-items:center;justify-content:center;border-radius:.9rem;border:1px solid rgba(167,139,250,.18);background:linear-gradient(135deg,rgba(139,92,246,.16),rgba(34,211,238,.06))}
+.profile-date span{font-size:1.05rem;font-weight:700;line-height:1}
+.profile-date small{margin-top:.25rem;font-size:.58rem;letter-spacing:.12em;color:rgba(255,255,255,.35)}
+.profile-course{display:flex;align-items:center;gap:.75rem;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.025);border-radius:.85rem;padding:.65rem .75rem;transition:.2s ease}
+.profile-course:hover{border-color:rgba(167,139,250,.18);background:rgba(255,255,255,.045)}
+.lms-auth{background:radial-gradient(circle at 50% 10%,rgba(139,92,246,.13),transparent 25rem),#070b14}
+.lms-auth form{border-color:rgba(167,139,250,.16);box-shadow:0 30px 90px rgba(0,0,0,.28)}
+.lms-auth input,.lms-auth select{transition:border-color .2s ease,background .2s ease,box-shadow .2s ease}
+.lms-auth input:focus,.lms-auth select:focus{border-color:rgba(167,139,250,.65);background:rgba(255,255,255,.065);box-shadow:0 0 0 4px rgba(139,92,246,.10)}
+.lms-input[type="datetime-local"],.lms-input[type="date"],.lms-input[type="time"]{color-scheme:dark}
+.lms-input[type="datetime-local"]::-webkit-calendar-picker-indicator,.lms-input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.65;cursor:pointer}
