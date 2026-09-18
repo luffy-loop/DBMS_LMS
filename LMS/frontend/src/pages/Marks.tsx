@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { API } from "../config"
 
-const API = "http://127.0.0.1:8000"
 
 type Submission = { id: number; assignment_id: number; student_id: number; answer: string; marks: number | null; file_id: string | null; file_name: string | null }
 

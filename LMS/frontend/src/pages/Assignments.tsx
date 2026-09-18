@@ -1,7 +1,7 @@
 import { useEffect,useState } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Send,Clock,FileText,Upload,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-const API="http://127.0.0.1:8000"
+import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number}
 type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";submitted:boolean;handout:{id:string;title:string;filename:string}|null}
 

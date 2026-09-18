@@ -42,8 +42,6 @@ app.include_router(quiz_router)
 app.include_router(teacher_insights_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-key = "lms-secret-key"
-alg = "HS256"
 
 @app.get("/")
 def home():
@@ -256,6 +254,12 @@ def assessment_payload(assignment, student_id=None):
 def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
+    if user["role"] == "student":
+        if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+    elif user["role"] == "teacher":
+        if not db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
+            raise HTTPException(status_code=403, detail="You can only access your own course")
     return [assessment_payload(a, user["id"] if user["role"] == "student" else None) for a in db.query(Assignment).filter(Assignment.course_id == course_id).all()]
 
 @app.post("/submissions")
@@ -399,9 +403,15 @@ async def add_resource(course_id: int, file: UploadFile = File(...), title: str 
     return {"message": "PDF uploaded", "id": str(result.inserted_id), "title": title}
 
 @app.get("/courses/{course_id}/resources")
-def get_resources(course_id: int, user=Depends(get_user)):
+def get_resources(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
+    if user["role"] == "student":
+        if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+    elif user["role"] == "teacher":
+        if not db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
+            raise HTTPException(status_code=403, detail="You can only access your own course")
     resources = mongo_db.resources.find(
         {"course_id": course_id, "assignment_id": {"$exists": False}},
         {"_id": 1, "title": 1, "filename": 1, "created_at": 1}
@@ -418,6 +428,17 @@ def download_resource(resource_id: str, user=Depends(get_user)):
         raise HTTPException(status_code=400, detail="Invalid resource id")
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
+    course_id = resource.get("course_id")
+    if user["role"] == "student":
+        from database import SessionLocal
+        db = SessionLocal()
+        try:
+            if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+                raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+        finally:
+            db.close()
+    elif user["role"] == "teacher" and resource.get("teacher_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
     return StreamingResponse(iter([resource["file"]]), media_type=resource.get("content_type", "application/pdf"), headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "resource.pdf")}"'})
 
 @app.get("/submissions/{submission_id}/download")
@@ -454,10 +475,13 @@ def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     return {"users": db.query(User).count(), "students": db.query(User).filter(User.role == "student").count(), "teachers": db.query(User).filter(User.role == "teacher").count(), "admins": db.query(User).filter(User.role == "admin").count(), "courses": db.query(Course).count(), "assignments": db.query(Assignment).count(), "submissions": db.query(Submission).count()}
 
 @app.get("/ai-search")
-def ai_search(q: str, user=Depends(get_user)):
+def ai_search(q: str, user=Depends(get_user), db: Session = Depends(get_db)):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
     try:
-        return {"query": q, "results": search_resources(q)}
+        course_ids = None
+        if user["role"] == "student":
+            course_ids = [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()]
+        return {"query": q, "results": search_resources(q, course_ids)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Search service unavailable: {exc}")
