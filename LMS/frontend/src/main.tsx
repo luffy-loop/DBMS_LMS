@@ -14,6 +14,7 @@ import Marks from "./pages/Marks"
 import Admin from "./pages/Admin"
 import AISearch from "./pages/AISearch"
 import StudyCopilot from "./pages/StudyCopilot"
+import QuizLab from "./pages/QuizLab"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -30,6 +31,7 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/admin" element={<Admin />} />
         <Route path="/search" element={<AISearch />} />
         <Route path="/copilot" element={<StudyCopilot />} />
+        <Route path="/quiz" element={<QuizLab />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>

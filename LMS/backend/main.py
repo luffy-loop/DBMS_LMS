@@ -17,6 +17,7 @@ from mongodb import mongo_db
 from vector_store import search_resources
 from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
+from quiz_generator import router as quiz_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -36,6 +37,7 @@ app.add_middleware(
 )
 app.include_router(learning_router)
 app.include_router(copilot_router)
+app.include_router(quiz_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 key = "lms-secret-key"
@@ -426,24 +428,16 @@ def download_submission(submission_id: int, user=Depends(get_user), db: Session 
         if submission.student_id != user["id"]:
             raise HTTPException(status_code=403, detail="Access denied")
     elif user["role"] == "teacher":
-        assignment = db.query(Assignment).filter(
-            Assignment.id == submission.assignment_id,
-            Assignment.teacher_id == user["id"]
-        ).first()
+        assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id, Assignment.teacher_id == user["id"]).first()
         if not assignment:
             raise HTTPException(status_code=403, detail="Access denied")
     elif user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    resource = mongo_db.submission_files.find_one({"submission_id": submission_id})
+    resource = mongo_db.submission_files.find_one({"submission_id": submission.id})
     if not resource:
-        raise HTTPException(status_code=404, detail="No PDF attached to this submission")
-
-    return StreamingResponse(
-        iter([resource["file"]]),
-        media_type=resource.get("content_type", "application/pdf"),
-        headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "submission.pdf")}"'}
-    )
+        raise HTTPException(status_code=404, detail="Submission file not found")
+    return StreamingResponse(iter([resource["file"]]), media_type=resource.get("content_type", "application/pdf"), headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "submission.pdf")}"'})
 
 @app.get("/admin/users")
 def admin_users(user=Depends(get_user), db: Session = Depends(get_db)):
