@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, Plus, X, Upload, FileText, BarChart3, Sparkles, UserRound } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import MobileNav from "../components/MobileNav"
 import { API } from "../config"
 
 type Course={id:number;title:string;description:string;teacher_id:number}
@@ -166,7 +167,8 @@ export default function TeacherDashboard(){
     </div>
    </div>}
   </main>
- </div>
+    <MobileNav role={"teacher"} active="dashboard />
+  </div>
 }
 
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Teacher Workspace</p></div></div>}
