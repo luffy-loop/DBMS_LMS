@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom"
 
 const API = "http://127.0.0.1:8000"
 
-type Submission = { id: number; assignment_id: number; student_id: number; answer: string; marks: number | null }
+type Submission = { id: number; assignment_id: number; student_id: number; answer: string; marks: number | null; file_id: string | null; file_name: string | null }
 
 export default function Marks() {
   const navigate = useNavigate()
@@ -32,6 +32,21 @@ export default function Marks() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load marks")
     } finally { setLoading(false) }
+  }
+
+  async function openPdf(id: number) {
+    const token = localStorage.getItem("token")
+    if (!token) return navigate("/login")
+    try {
+      const res = await fetch(`${API}/submissions/${id}/download`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error("Unable to open PDF")
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, "_blank", "noopener,noreferrer")
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to open PDF")
+    }
   }
 
   async function giveMarks(id: number) {
@@ -69,7 +84,8 @@ export default function Marks() {
       <section className="p-6 lg:p-10">
         {message && <div className="mb-6 rounded-xl border border-green-400/20 bg-green-400/10 px-4 py-3 text-sm text-green-300">{message}</div>}
         {error && <div className="mb-6 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-300">{error}</div>}
-        {loading ? <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-10 text-center text-white/40">Loading marks...</div> : submissions.length === 0 ? <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-10 text-center"><Award className="mx-auto mb-4 text-white/30" size={34}/><p className="text-white/60">{role === "teacher" ? "No pending submissions" : "No marks available yet"}</p></div> : <div className="space-y-5">{submissions.map((submission) => <div key={submission.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6"><div className="flex items-start justify-between gap-4"><div><p className="text-xs text-white/30">Submission ID: {submission.id}</p><h3 className="mt-2 text-lg font-medium">Assignment #{submission.assignment_id}</h3>{role === "teacher" && <p className="mt-1 text-sm text-white/40">Student ID: {submission.student_id}</p>}</div>{submission.marks !== null && <div className="rounded-xl bg-white/10 px-4 py-2 text-sm">Marks: <span className="font-semibold">{submission.marks}</span></div>}</div><div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4"><p className="mb-2 text-xs text-white/30">Answer</p><p className="text-sm leading-6 text-white/70">{submission.answer}</p></div>{role === "teacher" && submission.marks === null && <div className="mt-5 flex gap-3"><input type="number" min="0" max="100" value={marks[submission.id] || ""} onChange={(e) => setMarks((current) => ({ ...current, [submission.id]: e.target.value }))} placeholder="Enter marks" className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-white/30"/><button onClick={() => giveMarks(submission.id)} className="rounded-xl bg-white px-6 py-3 text-sm font-medium text-black hover:bg-white/90">Give Marks</button></div>}</div>)}</div>}
+        {loading ? <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-10 text-center text-white/40">Loading marks...</div> : submissions.length === 0 ? <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-10 text-center"><Award className="mx-auto mb-4 text-white/30" size={34}/><p className="text-white/60">{role === "teacher" ? "No pending submissions" : "No marks available yet"}</p></div> : <div className="space-y-5">{submissions.map((submission) => <div key={submission.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6"><div className="flex items-start justify-between gap-4"><div><p className="text-xs text-white/30">Submission ID: {submission.id}</p><h3 className="mt-2 text-lg font-medium">Assignment #{submission.assignment_id}</h3>{role === "teacher" && <p className="mt-1 text-sm text-white/40">Student ID: {submission.student_id}</p>}</div>{submission.marks !== null && <div className="rounded-xl bg-white/10 px-4 py-2 text-sm">Marks: <span className="font-semibold">{submission.marks}</span></div>}</div><div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4"><p className="mb-2 text-xs text-white/30">Answer</p><p className="text-sm leading-6 text-white/70">{submission.answer}</p></div>{submission.file_id && <button onClick={() => openPdf(submission.id)} className="mt-4 flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/5"><span>PDF: {submission.file_name}</span><span>Open</span></button>}
+          {role === "teacher" && submission.marks === null && <div className="mt-5 flex gap-3"><input type="number" min="0" max="100" value={marks[submission.id] || ""} onChange={(e) => setMarks((current) => ({ ...current, [submission.id]: e.target.value }))} placeholder="Enter marks" className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-white/30"/><button onClick={() => giveMarks(submission.id)} className="rounded-xl bg-white px-6 py-3 text-sm font-medium text-black hover:bg-white/90">Give Marks</button></div>}</div>)}</div>}
       </section>
     </main>
   </div>

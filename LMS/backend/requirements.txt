@@ -10,3 +10,4 @@ pymongo
 chromadb
 sentence-transformers
 pypdf
+python-multipart
