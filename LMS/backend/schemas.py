@@ -6,6 +6,7 @@ class Register(BaseModel):
     roll_no: str
     password: str
     role: str
+    section: str = "Unassigned"
 
 class Login(BaseModel):
     roll_no: str
