@@ -1,7 +1,7 @@
 import { useEffect,useState } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Upload,FileText } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-const API="http://127.0.0.1:8000"
+import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number}
 export default function TeacherDashboard(){
  const navigate=useNavigate(),[courses,setCourses]=useState<Course[]>([]),[title,setTitle]=useState(""),[description,setDescription]=useState(""),[show,setShow]=useState(false),[mode,setMode]=useState<"course"|"resource">("course"),[resourceCourse,setResourceCourse]=useState(""),[resourceTitle,setResourceTitle]=useState(""),[file,setFile]=useState<File|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("")
