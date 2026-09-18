@@ -59,9 +59,7 @@ def register(data: Register, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Roll number already registered")
     if data.role not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role")
-    section = data.section.strip() or "Unassigned"
-    if data.role == "teacher":
-        section = "Unassigned"
+    section = "Unassigned"
     user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role, section=section)
     db.add(user)
     db.commit()
