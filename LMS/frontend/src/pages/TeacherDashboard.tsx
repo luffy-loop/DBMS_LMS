@@ -90,6 +90,8 @@ export default function TeacherDashboard(){
    if(!r.ok)throw new Error(d.detail||"Upload failed")
    setMessage("PDF uploaded successfully")
    setShow(false)
+   setFile(null)
+   setResourceTitle("")
    await load()
   }catch(e){setError(e instanceof Error?e.message:"Upload failed")}
   finally{setBusy(false)}
@@ -164,7 +166,7 @@ export default function TeacherDashboard(){
     <div className="lms-modal-panel lms-card w-full max-w-xl rounded-3xl bg-[#0b101a] p-6 sm:p-7">
      <div className="mb-6 flex items-start justify-between gap-5"><div><p className="text-xs uppercase tracking-[.18em] text-violet-300/70">{mode==="resource"?"Course material":"Course studio"}</p><h3 className="mt-2 text-2xl font-semibold">{mode==="resource"?"Publish Course Material":"Create New Course"}</h3></div><button aria-label="Close" onClick={()=>setShow(false)} className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl text-white/60 hover:text-white"><X size={19}/></button></div>
      <form onSubmit={mode==="resource"?upload:create} className="space-y-5">
-      {mode==="resource"?<><Field label="Course"><select value={resourceCourse} onChange={e=>setResourceCourse(e.target.value)} className="lms-input"><option value="" disabled>Select a course</option>{courses.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}</select></Field><Field label="Material Title"><input value={resourceTitle} onChange={e=>setResourceTitle(e.target.value)} required className="lms-input" placeholder="e.g. Unit 3 — Normalization Notes"/></Field><Field label="PDF File"><input type="file" accept=".pdf,application/pdf" onChange={e=>setFile(e.target.files?.[0]||null)} required className="lms-file"/></Field></>:<><Field label="Course Title"><input value={title} onChange={e=>setTitle(e.target.value)} required className="lms-input" placeholder="e.g. Database Systems"/></Field><Field label="Description"><textarea value={description} onChange={e=>setDescription(e.target.value)} required rows={5} className="lms-input resize-none" placeholder="Describe what students will learn in this course..."/></Field></>}
+      {mode==="resource"?<><Field label="Course"><select value={resourceCourse} onChange={e=>setResourceCourse(e.target.value)} className="lms-input"><option value="" disabled>Select a course</option>{courses.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}</select></Field><Field label="Material Title"><input value={resourceTitle} onChange={e=>setResourceTitle(e.target.value)} required className="lms-input" placeholder="e.g. Unit 3 — Normalization Notes"/></Field><Field label="PDF File"><label className="lms-upload-zone"><input type="file" accept=".pdf,application/pdf" onChange={pickFile} required className="sr-only"/><span className="lms-upload-button"><Upload size={16}/>Choose PDF</span><span className="lms-upload-name">{file?.name||"No PDF selected"}</span></label></Field></>:<><Field label="Course Title"><input value={title} onChange={e=>setTitle(e.target.value)} required className="lms-input" placeholder="e.g. Database Systems"/></Field><Field label="Description"><textarea value={description} onChange={e=>setDescription(e.target.value)} required rows={5} className="lms-input resize-none" placeholder="Describe what students will learn in this course..."/></Field></>}
       <button disabled={busy} className="lms-btn-primary w-full rounded-xl py-3.5 text-sm font-semibold disabled:cursor-wait disabled:opacity-60">{busy?"Saving...":mode==="resource"?"Publish PDF Material":"Create Course"}</button>
      </form>
     </div>
@@ -172,7 +174,7 @@ export default function TeacherDashboard(){
   </main>
     
   
-    <MobileNav role={"teacher"} active="dashboard" />
+    <MobileNav role={"teacher"} active="courses" />
 </div>
 }
 
