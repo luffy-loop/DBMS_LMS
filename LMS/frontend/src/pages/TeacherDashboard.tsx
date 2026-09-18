@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, Plus, X, Upload, FileText, BarChart3, Sparkles } from "lucide-react"
+import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, Plus, X, Upload, FileText, BarChart3, Sparkles, UserRound } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
 
@@ -113,6 +113,9 @@ export default function TeacherDashboard(){
     <div className="flex items-center justify-between gap-5">
      <div><p className="text-sm text-white/40">Teacher Workspace</p><h2 className="mt-1 text-2xl font-semibold">Welcome back, {name}</h2><p className="mt-1 text-sm text-white/30">Manage courses, assessments and learning material from one place.</p></div>
      <button onClick={openCourseForm} className="lms-btn-primary hidden rounded-xl px-4 py-3 text-sm font-medium sm:inline-flex"><Plus size={17}/>New Course</button>
+     <div className="flex items-center gap-3">
+      <button onClick={()=>navigate("/profile")} className="lms-profile-trigger flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5" aria-label="Open profile"><UserRound size={18}/></button>
+     </div>
     </div>
    </header>
 

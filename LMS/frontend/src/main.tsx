@@ -17,6 +17,7 @@ import StudyCopilot from "./pages/StudyCopilot"
 import QuizLab from "./pages/QuizLab"
 import TeacherInsights from "./pages/TeacherInsights"
 import LearningPath from "./pages/LearningPath"
+import Profile from "./pages/Profile"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -36,6 +37,7 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/quiz" element={<QuizLab />} />
         <Route path="/teacher/insights" element={<TeacherInsights />} />
         <Route path="/learning-path" element={<LearningPath />} />
+        <Route path="/profile" element={<Profile />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>
