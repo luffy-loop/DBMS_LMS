@@ -158,6 +158,7 @@ export default function Courses() {
         </button>
 
           <button
+            onClick={() => navigate("/marks")}
             className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white"
           >
             <Award size={18} />
