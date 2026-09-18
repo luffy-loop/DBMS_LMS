@@ -1,14 +1,19 @@
 import chromadb
-from sentence_transformers import SentenceTransformer
+from functools import lru_cache
 from mongodb import mongo_db
 
 client = chromadb.PersistentClient(path="./vector_data")
 collection = client.get_or_create_collection("lms_resources")
-model = SentenceTransformer("all-MiniLM-L6-v2")
+
+@lru_cache(maxsize=1)
+def get_model():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 def _sync_resources(resources):
     if not resources:
         return
+    model = get_model()
     ids, docs, metas, embeddings = [], [], [], []
     for item in resources:
         ids.append(str(item["id"]))
@@ -34,6 +39,7 @@ def search_resources(query, course_ids=None):
         _sync_resources(resources)
         if not resources:
             return []
+        model = get_model()
         kwargs = {"query_embeddings":[model.encode(query).tolist()],"n_results":min(8,len(resources)),"include":["documents","metadatas","distances"]}
         if course_ids is not None and course_ids:
             kwargs["where"] = {"course_id":{"$in":[str(x) for x in course_ids]}}
