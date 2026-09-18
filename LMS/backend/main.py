@@ -59,7 +59,10 @@ def register(data: Register, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Roll number already registered")
     if data.role not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role")
-    user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role, section=data.section.strip() or "Unassigned")
+    section = data.section.strip() or "Unassigned"
+    if data.role == "teacher":
+        section = "Unassigned"
+    user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role, section=section)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -504,7 +507,21 @@ def download_submission(submission_id: int, user=Depends(get_user), db: Session 
 def admin_users(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access only")
-    return [{"id": u.id, "name": u.name, "roll_no": u.email, "role": u.role} for u in db.query(User).all()]
+    return [{"id": u.id, "name": u.name, "roll_no": u.email, "role": u.role, "section": u.section or "Unassigned"} for u in db.query(User).order_by(User.role, User.name).all()]
+
+@app.put("/admin/teachers/{teacher_id}/section")
+def assign_teacher_section(teacher_id: int, section: str, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    section = section.strip().upper()
+    if section not in [f"A{i}" for i in range(1, 8)]:
+        raise HTTPException(status_code=400, detail="Section must be A1 through A7")
+    teacher = db.query(User).filter(User.id == teacher_id, User.role == "teacher").first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    teacher.section = section
+    db.commit()
+    return {"message": "Teacher section assigned", "teacher_id": teacher.id, "section": teacher.section}
 
 @app.get("/admin/overview")
 def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
