@@ -18,6 +18,7 @@ from vector_store import search_resources
 from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
 from quiz_generator import router as quiz_router
+from teacher_insights import router as teacher_insights_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(learning_router)
 app.include_router(copilot_router)
 app.include_router(quiz_router)
+app.include_router(teacher_insights_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 key = "lms-secret-key"
