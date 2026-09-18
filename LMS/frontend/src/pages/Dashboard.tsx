@@ -493,7 +493,7 @@ function RolePlaceholder({
 
       </div>
     </div>
-  )
-    <MobileNav role={"student"} active="dashboard />
+    <MobileNav role={"student"} active="dashboard" />
   </div>
+  )
 }
