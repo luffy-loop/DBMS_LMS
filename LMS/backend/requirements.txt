@@ -9,3 +9,4 @@ email-validator
 pymongo
 chromadb
 sentence-transformers
+pypdf
