@@ -1,6 +1,7 @@
 import { useEffect,useState,useRef } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Send,Clock,FileText,Upload,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import MobileNav from "../components/MobileNav"
 import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number}
 type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";submitted:boolean;handout:{id:string;title:string;filename:string}|null}
@@ -104,7 +105,8 @@ export default function Assignments(){
      </div>)}</div>
    </section>
   </main>
- </div>
+    <MobileNav role={role} active="assignments />
+  </div>
 }
 
 function DateField({inputRef,value,onChange,onClear}:{inputRef:React.RefObject<HTMLInputElement|null>;value:string;onChange:(v:string)=>void;onClear:()=>void}){
