@@ -6,7 +6,7 @@ export default function MobileNav({role="student",active}:{role?:string;active:s
  const dashboard=role==="teacher"?"/teacher":role==="admin"?"/admin":"/dashboard"
  const items=[
   {id:"dashboard",label:"Home",path:dashboard,icon:LayoutDashboard},
-  {id:"courses",label:"Courses",path:role==="teacher"?"/teacher":"/courses",icon:BookOpen},
+  {id:"courses",label:"Courses",path:"/courses",icon:BookOpen},
   {id:"assignments",label:"Tasks",path:"/assignments",icon:ClipboardList},
   {id:"ai",label:"AI Hub",path:"/copilot",icon:Sparkles},
   {id:"profile",label:"Profile",path:"/profile",icon:UserRound}
