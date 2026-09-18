@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import MobileNav from "../components/MobileNav"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, UserRound, GraduationCap, Users, ShieldCheck, CalendarDays, Clock3, ArrowRight, Sparkles, Building2 } from "lucide-react"
 import { API } from "../config"
 
@@ -82,7 +83,8 @@ export default function Profile(){
     </div>
    </section>
   </main>
- </div>
+    <MobileNav role={role} active="profile />
+  </div>
 }
 
 function Brand({role}:{role:string}){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40 capitalize">{role} Workspace</p></div></div>}
