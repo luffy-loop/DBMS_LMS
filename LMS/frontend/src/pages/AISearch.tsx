@@ -1,4 +1,5 @@
-import { FormEvent, useState } from "react"
+import { useState } from "react"
+import type { FormEvent } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, Sparkles } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"

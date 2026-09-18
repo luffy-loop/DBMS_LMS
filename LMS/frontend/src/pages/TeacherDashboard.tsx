@@ -1,5 +1,5 @@
 import { useEffect,useState } from "react"
-import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,User,Plus,X,Upload,FileText } from "lucide-react"
+import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Upload,FileText } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number}
