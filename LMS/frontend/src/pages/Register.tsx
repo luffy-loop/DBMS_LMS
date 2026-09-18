@@ -10,7 +10,7 @@ export default function Register() {
   const [rollNo, setRollNo] = useState("")
   const [password, setPassword] = useState("")
   const [role, setRole] = useState("student")
-  const [section, setSection] = useState("")
+  const [section, setSection] = useState("A1")
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
@@ -48,7 +48,7 @@ export default function Register() {
       setRollNo("")
       setPassword("")
       setRole("student")
-      setSection("")
+      setSection("A1")
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Registration failed"
@@ -139,19 +139,20 @@ export default function Register() {
               />
             </div>
 
-            <div>
-              <label className="mb-2 block text-sm text-white/60">
-                Section / Batch
-              </label>
-              <input
-                type="text"
-                value={section}
-                onChange={(e) => setSection(e.target.value)}
-                placeholder="e.g. A6 / Faculty"
-                required
-                className="lms-input"
-              />
-            </div>
+            {role === "student" ? (
+              <div>
+                <label className="mb-2 block text-sm text-white/60">Section / Batch</label>
+                <select value={section} onChange={(e) => setSection(e.target.value)} className="lms-input">
+                  {["A1","A2","A3","A4","A5","A6","A7"].map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <p className="mt-2 text-xs text-white/30">Students choose their registered section.</p>
+              </div>
+            ) : role === "teacher" ? (
+              <div className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-4 py-3 text-sm">
+                <p className="text-violet-200">Section assigned by Admin</p>
+                <p className="mt-1 text-xs text-white/35">Your faculty section will be allotted after registration.</p>
+              </div>
+            ) : null}
 
             <div>
               <label className="mb-2 block text-sm text-white/60">
