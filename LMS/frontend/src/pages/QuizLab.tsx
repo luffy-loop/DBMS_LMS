@@ -47,7 +47,7 @@ export default function QuizLab(){
         <Nav onClick={()=>navigate("/marks")} icon={<Award size={18}/>} text="Marks"/>
         <Nav onClick={()=>navigate("/search")} icon={<Search size={18}/>} text="AI Search"/>
         <Nav onClick={()=>navigate("/copilot")} icon={<BrainCircuit size={18}/>} text="Study Copilot"/>
-        <Nav active icon={<Sparkles size={18}/>} text="Quiz Lab"/>
+        <Nav onClick={()=>navigate("/copilot")} icon={<BrainCircuit size={18}/>} text="AI Study Hub"/><Nav active icon={<Sparkles size={18}/>} text="Quiz Lab"/>
       </nav>
       <button onClick={logout} className="lms-nav absolute bottom-6 left-5 right-5"><LogOut size={18}/>Logout</button>
     </aside>

@@ -32,6 +32,8 @@ export default function Profile(){
     {role!=="admin"&&<Nav onClick={()=>navigate("/assignments")} icon={<ClipboardList size={18}/>} text="Assignments"/>}
     {role==="student"&&<Nav onClick={()=>navigate("/marks")} icon={<Award size={18}/>} text="Marks"/>}
     <Nav onClick={()=>navigate("/search")} icon={<Search size={18}/>} text="AI Search"/>
+    {role!=="admin"&&<Nav onClick={()=>navigate("/copilot")} icon={<Sparkles size={18}/>} text="AI Study Hub"/>}
+    {role!=="admin"&&<Nav onClick={()=>navigate("/quiz")} icon={<Sparkles size={18}/>} text="Quiz Lab"/>}
     <Nav active icon={<UserRound size={18}/>} text="Profile"/>
    </nav>
    <button onClick={logout} className="lms-nav absolute bottom-6 left-5 right-5"><LogOut size={18}/>Logout</button>

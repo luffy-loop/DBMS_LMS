@@ -84,6 +84,9 @@ export default function Register() {
           <p className="mt-2 text-sm text-white/40">
             Join the LMS platform
           </p>
+          <div className="mt-4 inline-flex items-center rounded-full border border-violet-400/15 bg-violet-400/5 px-3 py-1.5 text-xs text-violet-200">
+            Faculty sections are assigned by Admin
+          </div>
 
         </div>
 
