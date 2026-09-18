@@ -1,6 +1,7 @@
 import { useEffect,useState,useRef } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Send,Clock,FileText,Upload,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import MobileNav from "../components/MobileNav"
 import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number}
 type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";submitted:boolean;handout:{id:string;title:string;filename:string}|null}
@@ -104,7 +105,10 @@ export default function Assignments(){
      </div>)}</div>
    </section>
   </main>
- </div>
+    
+  
+    <MobileNav role={role} active="assignments" />
+</div>
 }
 
 function DateField({inputRef,value,onChange,onClear}:{inputRef:React.RefObject<HTMLInputElement|null>;value:string;onChange:(v:string)=>void;onClear:()=>void}){
@@ -113,4 +117,5 @@ function DateField({inputRef,value,onChange,onClear}:{inputRef:React.RefObject<H
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div></div>}
 function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"nav "+(active?"active":"")}>{icon}{text}</button>}
 function Field({label,children}:{label:string;children:React.ReactNode}){return <div><label className="mb-2 block text-sm text-white/60">{label}</label>{children}</div>}
-function Msg({text,ok=false}:{text:string;ok?:boolean}){return <div className={"mt-6 rounded-xl border px-4 py-3 text-sm "+(ok?"border-green-400/20 bg-green-400/10 text-green-300":"border-red-400/20 bg-red-400/10 text-red-300")}>{text}</div>}
+function Msg({text,ok=false}:{text:string;ok?:boolean}){return <div className={"mt-6 rounded-xl border px-4 py-3 text-sm "+(ok?"border-green-400/20 bg-green-400/10 text-green-300":"border-red-400/20 bg-red-400/10 text-red-300")}>{text}
+  </div>}
