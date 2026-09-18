@@ -211,7 +211,15 @@ def assessment_status(assignment):
         return "closed"
     return "open"
 
-def assessment_payload(assignment):
+def db_submission_exists(assignment_id, student_id):
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        return db.query(Submission.id).filter(Submission.assignment_id == assignment_id, Submission.student_id == student_id).first() is not None
+    finally:
+        db.close()
+
+def assessment_payload(assignment, student_id=None):
     handout = mongo_db.resources.find_one(
         {"assignment_id": assignment.id},
         {"_id": 1, "title": 1, "filename": 1}
@@ -228,6 +236,7 @@ def assessment_payload(assignment):
         "duration_minutes": assignment.duration_minutes,
         "deadline": assessment_deadline(assignment),
         "status": assessment_status(assignment),
+        "submitted": bool(student_id and db_submission_exists(assignment.id, student_id)),
         "handout": {
             "id": str(handout["_id"]),
             "title": handout.get("title", ""),
@@ -239,7 +248,7 @@ def assessment_payload(assignment):
 def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    return [assessment_payload(a) for a in db.query(Assignment).filter(Assignment.course_id == course_id).all()]
+    return [assessment_payload(a, user["id"] if user["role"] == "student" else None) for a in db.query(Assignment).filter(Assignment.course_id == course_id).all()]
 
 @app.post("/submissions")
 async def submit_assignment(

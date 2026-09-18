@@ -3,12 +3,13 @@ import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Send,
 import { useNavigate } from "react-router-dom"
 const API="http://127.0.0.1:8000"
 type Course={id:number;title:string;description:string;teacher_id:number}
-type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";handout:{id:string;title:string;filename:string}|null}
+type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";submitted:boolean;handout:{id:string;title:string;filename:string}|null}
 
 export default function Assignments(){
  const navigate=useNavigate(),[role,setRole]=useState(""),[courses,setCourses]=useState<Course[]>([]),[items,setItems]=useState<A[]>([]),[title,setTitle]=useState(""),[description,setDescription]=useState(""),[courseId,setCourseId]=useState(""),[type,setType]=useState("assignment"),[start,setStart]=useState(""),[end,setEnd]=useState(""),[duration,setDuration]=useState(""),[handout,setHandout]=useState<File|null>(null),[answer,setAnswer]=useState(""),[submissionFile,setSubmissionFile]=useState<File|null>(null),[selected,setSelected]=useState<number|null>(null),[show,setShow]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("")
 
  useEffect(()=>{const t=localStorage.getItem("token"),r=localStorage.getItem("role")||"student";if(!t){navigate("/login");return}setRole(r);load(t,r)},[navigate])
+ useEffect(()=>{const id=window.setInterval(()=>setItems(v=>[...v]),1000);return()=>window.clearInterval(id)},[])
 
  async function load(t:string,r:string){
   try{
@@ -63,6 +64,7 @@ export default function Assignments(){
  }
 
  function fmt(v:string|null){return v?new Date(v).toLocaleString([],{dateStyle:"medium",timeStyle:"short"}):"No deadline"}
+ function remaining(v:string|null){if(!v)return "";const ms=new Date(v).getTime()-Date.now();if(ms<=0)return "Time expired";const s=Math.floor(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sec=s%60;return d?`${d}d ${h}h ${m}m`:h?`${h}h ${m}m`:m?`${m}m ${sec}s`:`${sec}s`}
  function logout(){localStorage.clear();navigate("/login")}
 
  return <div className="min-h-screen bg-[#070b14] text-white">
@@ -92,10 +94,10 @@ export default function Assignments(){
     </div>}
     <div className="mt-8 space-y-4">{items.map(a=><div key={a.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6">
       <div className="flex flex-col gap-4 md:flex-row md:justify-between"><div className="min-w-0"><span className="text-xs uppercase tracking-wider text-white/30">{a.type} · {courses.find(x=>x.id===a.course_id)?.title||"Course #"+a.course_id}</span><h4 className="mt-2 text-lg font-medium">{a.title}</h4><p className="mt-2 text-sm text-white/40">{a.description}</p>
-       <div className="mt-4 flex flex-wrap gap-4 text-xs text-white/40"><span className="flex items-center gap-1"><Clock size={14}/>{a.start_time?"Opens "+fmt(a.start_time):"Open now"}</span><span>Deadline: {fmt(a.deadline)}</span><span>Duration: {a.duration_minutes?a.duration_minutes+" min":"No limit"}</span></div>
+       <div className="mt-4 flex flex-wrap gap-4 text-xs text-white/40"><span className="flex items-center gap-1"><Clock size={14}/>{a.start_time?"Opens "+fmt(a.start_time):"Open now"}</span><span>Deadline: {fmt(a.deadline)}</span><span>Duration: {a.duration_minutes?a.duration_minutes+" min":"No limit"}</span>{role==="student"&&a.status==="open"&&!a.submitted&&<span className="text-white/70">Time left: {remaining(a.deadline)}</span>}</div>
        {a.handout&&<button onClick={()=>openPdf(a.handout!.id)} className="mt-4 flex items-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/5"><FileText size={15}/>{a.handout.title}<Download size={14}/></button>}
-      </div>{role==="student"&&<div><span className="rounded-full bg-white/10 px-3 py-1 text-xs">{a.status}</span>{a.status==="open"&&<button onClick={()=>setSelected(selected===a.id?null:a.id)} className="mt-3 flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-medium text-black"><Send size={16}/>{selected===a.id?"Close":"Submit"}</button>}</div>}</div>
-      {selected===a.id&&a.status==="open"&&<div className="mt-6 border-t border-white/10 pt-6"><textarea value={answer} onChange={e=>setAnswer(e.target.value)} rows={6} className="input resize-none" placeholder="Write your answer here..."/>
+      </div>{role==="student"&&<div><span className="rounded-full bg-white/10 px-3 py-1 text-xs">{a.submitted?"submitted":a.status}</span>{a.status==="open"&&!a.submitted&&<button onClick={()=>setSelected(selected===a.id?null:a.id)} className="mt-3 flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-medium text-black"><Send size={16}/>{selected===a.id?"Close":"Submit"}</button>}</div>}</div>
+      {selected===a.id&&a.status==="open"&&!a.submitted&&<div className="mt-6 border-t border-white/10 pt-6"><textarea value={answer} onChange={e=>setAnswer(e.target.value)} rows={6} className="input resize-none" placeholder="Write your answer here..."/>
        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4"><p className="mb-2 text-sm font-medium">Attach PDF submission <span className="text-white/30">(optional)</span></p><input type="file" accept=".pdf,application/pdf" onChange={e=>setSubmissionFile(e.target.files?.[0]||null)} className="block w-full text-sm text-white/50"/><p className="mt-2 text-xs text-white/30">Upload your solved assignment, handwritten work or supporting document.</p></div>
        <button onClick={()=>submit(a.id)} className="mt-4 rounded-xl bg-white px-6 py-3 text-sm font-medium text-black">Submit Assessment</button>
       </div>}
