@@ -10,6 +10,7 @@ export default function Register() {
   const [rollNo, setRollNo] = useState("")
   const [password, setPassword] = useState("")
   const [role, setRole] = useState("student")
+  const [section, setSection] = useState("")
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
@@ -32,6 +33,7 @@ export default function Register() {
           roll_no: rollNo,
           password,
           role,
+          section,
         }),
       })
 
@@ -46,6 +48,7 @@ export default function Register() {
       setRollNo("")
       setPassword("")
       setRole("student")
+      setSection("")
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Registration failed"
@@ -56,7 +59,7 @@ export default function Register() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-white flex items-center justify-center px-6">
+    <div className="lms-auth min-h-screen bg-[#070b14] text-white flex items-center justify-center px-6">
 
       <button
         onClick={() => navigate("/")}
@@ -133,6 +136,20 @@ export default function Register() {
                 placeholder="Create a password"
                 required
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-white/30"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-white/60">
+                Section / Batch
+              </label>
+              <input
+                type="text"
+                value={section}
+                onChange={(e) => setSection(e.target.value)}
+                placeholder="e.g. A6 / Faculty"
+                required
+                className="lms-input"
               />
             </div>
 
