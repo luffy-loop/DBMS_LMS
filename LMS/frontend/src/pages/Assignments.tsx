@@ -1,4 +1,4 @@
-import { useEffect,useState } from "react"
+import { useEffect,useState,useRef } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Plus,X,Send,Clock,FileText,Upload,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
@@ -6,7 +6,7 @@ type Course={id:number;title:string;description:string;teacher_id:number}
 type A={id:number;title:string;description:string;course_id:number;teacher_id:number;type:string;start_time:string|null;end_time:string|null;duration_minutes:number|null;deadline:string|null;status:"upcoming"|"open"|"closed";submitted:boolean;handout:{id:string;title:string;filename:string}|null}
 
 export default function Assignments(){
- const navigate=useNavigate(),[role,setRole]=useState(""),[courses,setCourses]=useState<Course[]>([]),[items,setItems]=useState<A[]>([]),[title,setTitle]=useState(""),[description,setDescription]=useState(""),[courseId,setCourseId]=useState(""),[type,setType]=useState("assignment"),[start,setStart]=useState(""),[end,setEnd]=useState(""),[duration,setDuration]=useState(""),[handout,setHandout]=useState<File|null>(null),[answer,setAnswer]=useState(""),[submissionFile,setSubmissionFile]=useState<File|null>(null),[selected,setSelected]=useState<number|null>(null),[show,setShow]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("")
+ const startRef=useRef<HTMLInputElement>(null),endRef=useRef<HTMLInputElement>(null),navigate=useNavigate(),[role,setRole]=useState(""),[courses,setCourses]=useState<Course[]>([]),[items,setItems]=useState<A[]>([]),[title,setTitle]=useState(""),[description,setDescription]=useState(""),[courseId,setCourseId]=useState(""),[type,setType]=useState("assignment"),[start,setStart]=useState(""),[end,setEnd]=useState(""),[duration,setDuration]=useState(""),[handout,setHandout]=useState<File|null>(null),[answer,setAnswer]=useState(""),[submissionFile,setSubmissionFile]=useState<File|null>(null),[selected,setSelected]=useState<number|null>(null),[show,setShow]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("")
 
  useEffect(()=>{const t=localStorage.getItem("token"),r=localStorage.getItem("role")||"student";if(!t){navigate("/login");return}setRole(r);load(t,r)},[navigate])
  useEffect(()=>{const id=window.setInterval(()=>setItems(v=>[...v]),1000);return()=>window.clearInterval(id)},[])
@@ -86,8 +86,8 @@ export default function Assignments(){
       <Field label="Type"><select value={type} onChange={e=>setType(e.target.value)} className="input"><option value="assignment">Assignment</option><option value="test">Test</option></select></Field>
       <Field label="Title"><input value={title} onChange={e=>setTitle(e.target.value)} required className="input" placeholder="e.g. Process Scheduling Assignment"/></Field>
       <Field label="Instructions"><textarea value={description} onChange={e=>setDescription(e.target.value)} required rows={4} className="input resize-none" placeholder="Add instructions for students..."/></Field>
-      <div className="grid gap-4 md:grid-cols-3"><Field label="Opens"><input type="datetime-local" value={start} onChange={e=>setStart(e.target.value)} className="input"/></Field><Field label="Closes"><input type="datetime-local" value={end} onChange={e=>setEnd(e.target.value)} className="input"/></Field><Field label="Duration (min)"><input type="number" min="1" value={duration} onChange={e=>setDuration(e.target.value)} placeholder="60" className="input"/></Field></div>
-      <Field label="Assignment Handout / Question PDF"><input type="file" accept=".pdf,application/pdf" onChange={e=>setHandout(e.target.files?.[0]||null)} className="block w-full text-sm text-white/50"/></Field>
+      <div className="grid gap-4 md:grid-cols-3"><Field label="Opens"><DateField inputRef={startRef} value={start} onChange={setStart} onClear={()=>setStart("")}/></Field><Field label="Closes"><DateField inputRef={endRef} value={end} onChange={setEnd} onClear={()=>setEnd("")}/></Field><Field label="Duration (min)"><input type="number" min="1" value={duration} onChange={e=>setDuration(e.target.value)} placeholder="60" className="input"/></Field></div>
+      <Field label="Assignment Handout / Question PDF"><label className="lms-upload-zone"><input type="file" accept=".pdf,application/pdf" onChange={e=>setHandout(e.target.files?.[0]||null)} className="sr-only"/><span className="lms-upload-button"><Upload size={16}/>Choose PDF</span><span className="lms-upload-name">{handout?.name||"No PDF selected"}</span></label></Field>
       <p className="text-xs text-white/30">Optional PDF for assignment questions, notes or instructions. Students can open it from the assessment.</p>
       <button disabled={!courseId} className="w-full rounded-xl bg-white py-3 text-sm font-medium text-black">{handout?<><Upload size={15} className="mr-2 inline"/>Create & Upload</>:"Create Assessment"}</button>
      </form>
@@ -106,6 +106,10 @@ export default function Assignments(){
   </main>
  </div>
 }
+
+function DateField({inputRef,value,onChange,onClear}:{inputRef:React.RefObject<HTMLInputElement|null>;value:string;onChange:(v:string)=>void;onClear:()=>void}){
+ const open=()=>{const el=inputRef.current;if(!el)return;try{el.showPicker()}catch{el.focus()}}
+ return <div className="lms-date-wrap"><button type="button" onClick={open} className="lms-date-display"><span>{value?new Date(value).toLocaleString([],{dateStyle:"medium",timeStyle:"short"}):"Select date & time"}</span><span className="lms-date-icon"><Clock size={17}/></span></button><input ref={inputRef} type="datetime-local" value={value} onChange={e=>onChange(e.target.value)} className="lms-date-native"/>{value&&<button type="button" onClick={onClear} className="lms-date-clear" aria-label="Clear date">×</button>}</div>}
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div></div>}
 function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"nav "+(active?"active":"")}>{icon}{text}</button>}
 function Field({label,children}:{label:string;children:React.ReactNode}){return <div><label className="mb-2 block text-sm text-white/60">{label}</label>{children}</div>}
