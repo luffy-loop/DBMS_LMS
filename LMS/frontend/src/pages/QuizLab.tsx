@@ -25,7 +25,7 @@ export default function QuizLab(){
       const d=await r.json()
       if(!r.ok)throw new Error(d.detail||"Quiz generation failed")
       setQuestions(d.questions)
-    }catch(e){setError(e instanceof Error?e.message:"Quiz generation failed")}
+    }catch(e){setError(e instanceof TypeError?"Unable to reach the quiz service. Check the deployed backend URL.":e instanceof Error?e.message:"Quiz generation failed")}
     finally{setLoading(false)}
   }
 

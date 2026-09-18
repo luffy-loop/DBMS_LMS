@@ -57,13 +57,13 @@ def build_answer(question, results):
 
 @router.post("/study-copilot")
 def study_copilot(data: CopilotRequest, user=Depends(get_user)):
-    if user["role"] != "student":
-        raise HTTPException(status_code=403, detail="Student access only")
+    if user["role"] not in ["student", "teacher", "admin"]:
+        raise HTTPException(status_code=403, detail="Access denied")
     question = data.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     try:
-        course_ids = _course_ids(user["id"])
+        course_ids = _course_ids(user["id"]) if user["role"] == "student" else None
         results = search_resources(question, course_ids)
         return {"question": question, **build_answer(question, results)}
     except Exception as exc:
@@ -71,8 +71,8 @@ def study_copilot(data: CopilotRequest, user=Depends(get_user)):
 
 @router.post("/study-notes")
 def study_notes(data: NotesRequest, user=Depends(get_user)):
-    if user["role"] != "student":
-        raise HTTPException(status_code=403, detail="Student access only")
+    if user["role"] not in ["student", "teacher", "admin"]:
+        raise HTTPException(status_code=403, detail="Access denied")
     topic = data.topic.strip()
     if not topic:
         raise HTTPException(status_code=400, detail="Topic cannot be empty")
@@ -80,7 +80,7 @@ def study_notes(data: NotesRequest, user=Depends(get_user)):
         knowledge = find_knowledge(topic)
         if knowledge:
             return {"topic": knowledge["topic"], "summary": knowledge["answer"], "bullets": knowledge["bullets"], "key_terms": knowledge["terms"], "exam_tip": knowledge["tip"], "mode": "study knowledge", "sources": [{"title": knowledge["topic"], "type": "core concept", "course_id": 0}]}
-        results = search_resources(topic, _course_ids(user["id"]))
+        results = search_resources(topic, _course_ids(user["id"]) if user["role"] == "student" else None)
         if not results:
             raise HTTPException(status_code=404, detail="No matching course material found for this topic")
         sentences = []
