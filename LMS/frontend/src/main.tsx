@@ -10,6 +10,7 @@ import "./index.css"
 import Courses from "./pages/Courses"
 import TeacherDashboard from "./pages/TeacherDashboard"
 import Assignments from "./pages/Assignments"
+import Marks from "./pages/Marks"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -22,6 +23,7 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/courses" element={<Courses />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/assignments" element={<Assignments />} />
+        <Route path="/marks" element={<Marks />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>
