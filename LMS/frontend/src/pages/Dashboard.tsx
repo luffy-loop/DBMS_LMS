@@ -7,6 +7,7 @@ import {
   LogOut,
   LayoutDashboard,
   Search,
+  BrainCircuit,
   User,
   Sparkles,
   Target,
@@ -161,6 +162,16 @@ export default function Dashboard() {
             AI Search
           </button>
 
+          <button onClick={() => navigate("/copilot")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white">
+            <BrainCircuit size={18} />
+            AI Study Hub
+          </button>
+
+          <button onClick={() => navigate("/quiz")} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-white/50 hover:bg-white/5 hover:text-white">
+            <Sparkles size={18} />
+            Quiz Lab
+          </button>
+
         </nav>
 
         <button
@@ -228,7 +239,7 @@ export default function Dashboard() {
 
               </div>
 
-              <div className="lms-hero mt-8 rounded-3xl p-6 lg:p-8"><div className="relative z-[1] flex flex-col gap-6 md:flex-row md:items-end md:justify-between"><div><p className="text-sm font-medium text-violet-300">Personal learning space</p><h3 className="mt-2 text-2xl font-semibold tracking-tight">Keep your learning momentum.</h3><p className="mt-2 max-w-xl text-sm leading-6 text-white/45">Your courses, submissions and progress are collected here so you always know what to work on next.</p></div><button onClick={() => navigate("/search")} className="lms-btn-primary rounded-xl px-4 py-3 text-sm font-medium"><Search size={16}/>Ask AI Search</button></div></div><div className="mt-10">
+              <div className="lms-hero mt-8 rounded-3xl p-6 lg:p-8"><div className="relative z-[1] flex flex-col gap-6 md:flex-row md:items-end md:justify-between"><div><p className="text-sm font-medium text-violet-300">Personal learning space</p><h3 className="mt-2 text-2xl font-semibold tracking-tight">Keep your learning momentum.</h3><p className="mt-2 max-w-xl text-sm leading-6 text-white/45">Your courses, submissions and progress are collected here so you always know what to work on next.</p></div><button onClick={() => navigate("/copilot")} className="lms-btn-primary rounded-xl px-4 py-3 text-sm font-medium"><BrainCircuit size={16}/>Open AI Study Hub</button></div></div><div className="mt-10">
 
                 <div className="mb-5 flex items-center justify-between">
                   <div>
@@ -334,6 +345,19 @@ export default function Dashboard() {
                     <div className="mt-7 rounded-2xl border border-dashed border-white/10 p-6 text-sm text-white/35">Building your learning profile...</div>
                   )}
                 </div>
+              </div>
+
+              <div className="mt-10 grid gap-4 md:grid-cols-2">
+                <button onClick={() => navigate("/copilot")} className="lms-card rounded-2xl p-5 text-left">
+                  <div className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl"><BrainCircuit size={19}/></div>
+                  <p className="mt-4 font-medium">AI Study Hub</p>
+                  <p className="mt-2 text-sm leading-6 text-white/35">Ask basic questions, get course-grounded answers, and make quick revision notes.</p>
+                </button>
+                <button onClick={() => navigate("/quiz")} className="lms-card rounded-2xl p-5 text-left">
+                  <div className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl"><Sparkles size={19}/></div>
+                  <p className="mt-4 font-medium">Quiz Lab</p>
+                  <p className="mt-2 text-sm leading-6 text-white/35">Generate a fresh concept quiz and check your score instantly.</p>
+                </button>
               </div>
 
               <div className="mt-10">
