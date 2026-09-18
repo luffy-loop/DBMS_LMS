@@ -12,7 +12,7 @@ from bson import ObjectId
 from database import Base, engine, get_db
 from models import User, Course, Enrollment, Assignment, Submission
 from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
-from auth import get_user, key, alg
+from auth import get_user
 from mongodb import mongo_db
 from vector_store import search_resources
 from learning_insights import router as learning_router
@@ -42,6 +42,8 @@ app.include_router(quiz_router)
 app.include_router(teacher_insights_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+key = "lms-secret-key"
+alg = "HS256"
 
 @app.get("/")
 def home():

@@ -281,7 +281,7 @@ export default function Dashboard() {
                           {course.description}
                         </p>
 
-                        <button onClick={() => navigate("/courses")} className="mt-5 text-sm font-medium text-violet-300 transition hover:text-white">
+                        <button className="mt-5 text-sm font-medium text-violet-300 transition hover:text-white">
                           View Course →
                         </button>
 
@@ -298,7 +298,7 @@ export default function Dashboard() {
                   <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
                     <div>
                       <div className="flex items-center gap-2 text-violet-300"><Sparkles size={18}/><span className="text-sm font-medium">Adaptive Learning Engine</span></div>
-                      <div className="flex flex-wrap items-center justify-between gap-4"><h3 className="mt-2 text-2xl font-semibold">Your learning path</h3><button onClick={() => navigate("/learning-path")} className="lms-btn-secondary rounded-xl px-4 py-2.5 text-sm">Open full path <ArrowRight size={15}/></button></div>
+                      <h3 className="mt-2 text-2xl font-semibold">Your learning path</h3>
                       <p className="mt-2 max-w-2xl text-sm leading-6 text-white/45">Your progress, submissions and marks are analyzed to suggest what you should focus on next.</p>
                     </div>
                     <div className="lms-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"><Target size={22}/></div>

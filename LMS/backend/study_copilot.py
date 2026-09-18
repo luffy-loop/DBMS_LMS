@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from auth import get_user
 from vector_store import search_resources
+from database import SessionLocal
+from models import Enrollment
 
 router = APIRouter()
 
@@ -64,7 +66,12 @@ def study_copilot(data: CopilotRequest, user=Depends(get_user)):
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     try:
-        results = search_resources(question)
+        db = SessionLocal()
+        try:
+            course_ids = [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()]
+        finally:
+            db.close()
+        results = search_resources(question, course_ids)
         return {"question": question, **build_answer(question, results)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Study Copilot unavailable: {exc}")

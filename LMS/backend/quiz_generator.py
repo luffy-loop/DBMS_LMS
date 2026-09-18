@@ -3,6 +3,8 @@ import random
 from fastapi import APIRouter, Depends, HTTPException
 from auth import get_user
 from vector_store import search_resources
+from database import SessionLocal
+from models import Enrollment
 
 router = APIRouter()
 
@@ -51,7 +53,12 @@ def generate_quiz(user=Depends(get_user)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     try:
-        results = search_resources("key concepts definitions important topics")
+        db = SessionLocal()
+        try:
+            course_ids = [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()]
+        finally:
+            db.close()
+        results = search_resources("key concepts definitions important topics", course_ids)
         quiz = _build_quiz(results)
         if not quiz:
             raise HTTPException(status_code=404, detail="Upload course materials before generating a quiz")

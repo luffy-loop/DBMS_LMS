@@ -16,7 +16,6 @@ import AISearch from "./pages/AISearch"
 import StudyCopilot from "./pages/StudyCopilot"
 import QuizLab from "./pages/QuizLab"
 import TeacherInsights from "./pages/TeacherInsights"
-import LearningPath from "./pages/LearningPath"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -35,7 +34,6 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/copilot" element={<StudyCopilot />} />
         <Route path="/quiz" element={<QuizLab />} />
         <Route path="/teacher/insights" element={<TeacherInsights />} />
-        <Route path="/learning-path" element={<LearningPath />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>

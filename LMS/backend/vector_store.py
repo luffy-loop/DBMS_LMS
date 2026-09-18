@@ -17,20 +17,27 @@ def _sync_resources(resources):
         embeddings.append(model.encode(docs[-1]).tolist())
     collection.upsert(ids=ids, documents=docs, metadatas=metas, embeddings=embeddings)
 
-def search_resources(query):
+def search_resources(query, course_ids=None):
     from database import SessionLocal
     from models import Course
     db = SessionLocal()
     try:
         resources = []
-        for course in db.query(Course).all():
+        course_query = db.query(Course)
+        if course_ids is not None:
+            course_query = course_query.filter(Course.id.in_(course_ids)) if course_ids else course_query.filter(False)
+        for course in course_query.all():
             resources.append({"id": f"course-{course.id}", "title": course.title, "content": course.description, "type": "course", "course_id": course.id})
-        for resource in mongo_db.resources.find({}):
+        resource_query = {"course_id": {"$in": course_ids}} if course_ids is not None else {}
+        for resource in mongo_db.resources.find(resource_query):
             resources.append({"id": f"resource-{resource['_id']}", "title": resource.get("title", ""), "content": resource.get("content", ""), "type": "resource", "course_id": resource.get("course_id", 0)})
         _sync_resources(resources)
         if not resources:
             return []
-        result = collection.query(query_embeddings=[model.encode(query).tolist()], n_results=min(8, len(resources)), include=["documents", "metadatas", "distances"])
+        kwargs = {"query_embeddings":[model.encode(query).tolist()],"n_results":min(8,len(resources)),"include":["documents","metadatas","distances"]}
+        if course_ids is not None and course_ids:
+            kwargs["where"] = {"course_id":{"$in":[str(x) for x in course_ids]}}
+        result = collection.query(**kwargs)
         return [{
             "title": doc.split(". ", 1)[0],
             "content": doc,
