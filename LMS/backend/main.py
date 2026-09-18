@@ -15,6 +15,7 @@ from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentC
 from auth import get_user
 from mongodb import mongo_db
 from vector_store import search_resources
+from learning_insights import router as learning_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,6 +33,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(learning_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 key = "lms-secret-key"

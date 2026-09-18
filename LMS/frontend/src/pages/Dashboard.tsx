@@ -7,7 +7,11 @@ import {
   LogOut,
   LayoutDashboard,
   Search,
-  User
+  User,
+  Sparkles,
+  Target,
+  ArrowRight,
+  TrendingUp
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
@@ -26,6 +30,13 @@ type Submission = {
   marks: number | null
 }
 
+type LearningInsight = {
+  overall: { progress: number; average_marks: number | null; graded: number; submitted: number; total_assessments: number }
+  courses: { id: number; title: string; assessments: number; submitted: number; graded: number; average_marks: number | null; progress: number }[]
+  next_actions: { title: string; detail: string; priority: string; action: string }[]
+  focus_course: { id: number; title: string; progress: number; average_marks: number | null } | null
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
 
@@ -33,6 +44,7 @@ export default function Dashboard() {
   const [role, setRole] = useState("")
   const [courses, setCourses] = useState<Course[]>([])
   const [submissions, setSubmissions] = useState<Submission[]>([])
+  const [insights, setInsights] = useState<LearningInsight | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -61,9 +73,10 @@ export default function Dashboard() {
         Authorization: `Bearer ${token}`
       }
 
-      const [coursesRes, submissionsRes] = await Promise.all([
+      const [coursesRes, submissionsRes, insightsRes] = await Promise.all([
         fetch(`${API}/my-courses`, { headers }),
-        fetch(`${API}/my-submissions`, { headers })
+        fetch(`${API}/my-submissions`, { headers }),
+        fetch(`${API}/learning-insights`, { headers })
       ])
 
       if (coursesRes.ok) {
@@ -74,6 +87,10 @@ export default function Dashboard() {
       if (submissionsRes.ok) {
         const submissionsData = await submissionsRes.json()
         setSubmissions(submissionsData)
+      }
+      if (insightsRes.ok) {
+        const insightsData = await insightsRes.json()
+        setInsights(insightsData)
       }
     } catch (error) {
       console.error(error)
@@ -276,6 +293,48 @@ export default function Dashboard() {
 
               </div>
 
+              <div id="learning-path" className="lms-card mt-8 rounded-3xl p-6 lg:p-8">
+                <div className="relative z-[1]">
+                  <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-violet-300"><Sparkles size={18}/><span className="text-sm font-medium">Adaptive Learning Engine</span></div>
+                      <h3 className="mt-2 text-2xl font-semibold">Your learning path</h3>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-white/45">Your progress, submissions and marks are analyzed to suggest what you should focus on next.</p>
+                    </div>
+                    <div className="lms-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"><Target size={22}/></div>
+                  </div>
+                  {insights ? (
+                    <>
+                      <div className="mt-7 grid gap-4 md:grid-cols-3">
+                        <InsightMetric label="Course progress" value={insights.overall.progress + "%"} detail={insights.overall.submitted + " of " + insights.overall.total_assessments + " assessments submitted"} />
+                        <InsightMetric label="Average marks" value={insights.overall.average_marks === null ? "—" : String(insights.overall.average_marks)} detail={insights.overall.graded + " graded submissions"} />
+                        <InsightMetric label="Focus area" value={insights.focus_course?.title || "Getting started"} detail={insights.focus_course ? insights.focus_course.progress + "% course progress" : "Complete an assessment to unlock insights"} />
+                      </div>
+                      <div className="mt-7 grid gap-6 lg:grid-cols-[1.1fr_.9fr]">
+                        <div>
+                          <div className="mb-3 flex items-center justify-between"><p className="text-sm font-medium">Overall progress</p><span className="text-xs text-white/35">{insights.overall.progress}%</span></div>
+                          <div className="h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all" style={{width: insights.overall.progress + "%"}}/></div>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-white/[.025] p-4">
+                          <div className="flex items-center gap-2 text-white/70"><TrendingUp size={16}/><span className="text-sm font-medium">Next best actions</span></div>
+                          <div className="mt-3 space-y-3">
+                            {insights.next_actions.slice(0, 3).map((action, index) => (
+                              <button key={index} onClick={() => navigate(action.action === "search" ? "/search" : action.action === "courses" ? "/courses" : "/assignments")} className="group flex w-full items-start gap-3 rounded-xl border border-white/5 bg-white/[.025] p-3 text-left transition hover:border-violet-400/20 hover:bg-white/[.05]">
+                                <span className={"mt-0.5 h-2 w-2 shrink-0 rounded-full " + (action.priority === "high" ? "bg-violet-400" : "bg-cyan-400")}/>
+                                <span className="min-w-0 flex-1"><span className="block text-sm font-medium">{action.title}</span><span className="mt-1 block text-xs leading-5 text-white/35">{action.detail}</span></span>
+                                <ArrowRight size={15} className="mt-1 shrink-0 text-white/25 transition group-hover:translate-x-1 group-hover:text-white/60"/>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mt-7 rounded-2xl border border-dashed border-white/10 p-6 text-sm text-white/35">Building your learning profile...</div>
+                  )}
+                </div>
+              </div>
+
               <div className="mt-10">
 
                 <h3 className="text-xl font-semibold">
@@ -359,6 +418,14 @@ export default function Dashboard() {
 
     </div>
   )
+}
+
+function InsightMetric({label,value,detail}:{label:string;value:string;detail:string}) {
+  return <div className="rounded-2xl border border-white/10 bg-white/[.025] p-4">
+    <p className="text-xs uppercase tracking-wider text-white/30">{label}</p>
+    <p className="mt-2 text-xl font-semibold">{value}</p>
+    <p className="mt-1 text-xs text-white/35">{detail}</p>
+  </div>
 }
 
 function StatCard({
