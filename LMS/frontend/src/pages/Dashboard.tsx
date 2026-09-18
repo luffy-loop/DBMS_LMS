@@ -14,6 +14,7 @@ import {
   TrendingUp
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import MobileNav from "../components/MobileNav"
 import { API } from "../config"
 
 
@@ -493,4 +494,6 @@ function RolePlaceholder({
       </div>
     </div>
   )
+    <MobileNav role={"student"} active="dashboard />
+  </div>
 }
