@@ -7,7 +7,7 @@ python-jose
 passlib
 email-validator
 pymongo
-chromadb
-sentence-transformers
+chromadb>=1.0,<2.0
+sentence-transformers>=5.1,<6.1
 pypdf
 python-multipart
