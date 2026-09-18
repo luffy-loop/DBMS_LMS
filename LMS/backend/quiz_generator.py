@@ -33,10 +33,10 @@ def _make_questions(topics):
 
 @router.get("/quiz/generate")
 def generate_quiz(user=Depends(get_user)):
-    if user["role"] != "student":
-        raise HTTPException(status_code=403, detail="Student access only")
+    if user["role"] not in ["student", "teacher", "admin"]:
+        raise HTTPException(status_code=403, detail="Access denied")
     try:
-        course_ids = _course_ids(user["id"])
+        course_ids = _course_ids(user["id"]) if user["role"] == "student" else None
         results = search_resources("key concepts definitions important topics", course_ids)
         topics = _relevant_topics(results)
         if len(topics) < 5:

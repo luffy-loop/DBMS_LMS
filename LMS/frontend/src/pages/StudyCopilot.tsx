@@ -27,7 +27,7 @@ export default function StudyCopilot(){
       const d=await r.json()
       if(!r.ok)throw new Error(d.detail||"Copilot failed")
       setResponse(d)
-    }catch(e){setError(e instanceof Error?e.message:"Copilot failed")}
+    }catch(e){setError(e instanceof TypeError?"Unable to reach the Study Copilot service. Check the deployed backend URL.":e instanceof Error?e.message:"Copilot failed")}
     finally{setLoading(false)}
   }
 
