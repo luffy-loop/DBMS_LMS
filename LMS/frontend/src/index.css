@@ -214,3 +214,17 @@ button { cursor: pointer; }
   .lms-card,.lms-stat,.lms-btn-primary,.lms-btn-secondary,.lms-nav { transition: none; }
   .lms-card:hover,.lms-stat:hover,.lms-btn-primary:hover,.lms-btn-secondary:hover,.lms-nav:hover { transform: none; }
 }
+
+
+.lms-modal{background:rgba(2,5,12,.78);backdrop-filter:blur(14px);animation:lms-fade .18s ease}
+.lms-modal-panel{max-height:90vh;overflow:auto;animation:lms-modal-in .22s ease}
+.lms-file{display:block;width:100%;border:1px dashed rgba(255,255,255,.14);border-radius:.9rem;background:rgba(255,255,255,.035);padding:.8rem;color:rgba(255,255,255,.5);transition:.2s}
+.lms-file:hover{border-color:rgba(167,139,250,.35);background:rgba(139,92,246,.05)}
+.lms-file::file-selector-button{margin-right:.75rem;border:0;border-radius:.65rem;background:linear-gradient(135deg,#8b5cf6,#4f46e5);padding:.55rem .8rem;color:#fff;font-size:.8rem;font-weight:600;cursor:pointer}
+.lms-skeleton{background:linear-gradient(90deg,rgba(255,255,255,.035) 25%,rgba(255,255,255,.07) 50%,rgba(255,255,255,.035) 75%);background-size:200% 100%;animation:lms-shimmer 1.5s infinite}
+.lms-btn-primary:focus-visible,.lms-btn-secondary:focus-visible,.lms-nav:focus-visible,.lms-input:focus-visible{outline:none;box-shadow:0 0 0 4px rgba(139,92,246,.14)}
+.lms-btn-primary:disabled,.lms-btn-secondary:disabled{transform:none;filter:none}
+select option{background:#101522;color:#fff}
+@keyframes lms-shimmer{to{background-position:-200% 0}}
+@keyframes lms-fade{from{opacity:0}to{opacity:1}}
+@keyframes lms-modal-in{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
