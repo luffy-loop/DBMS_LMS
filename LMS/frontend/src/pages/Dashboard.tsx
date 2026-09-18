@@ -186,9 +186,9 @@ export default function Dashboard() {
             </h2>
           </div>
 
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5">
+          <button onClick={() => navigate("/profile")} className="lms-profile-trigger flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5" aria-label="Open profile">
             <User size={18} />
-          </div>
+          </button>
 
         </header>
 
