@@ -1,11 +1,11 @@
 import { useEffect,useState } from "react"
-import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,User,Check,FileText,Download } from "lucide-react"
+import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Check,FileText,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
 type Course={id:number;title:string;description:string;teacher_id:number};type Resource={id:string;title:string;filename:string}
 export default function Courses(){
  const navigate=useNavigate(),[courses,setCourses]=useState<Course[]>([]),[mine,setMine]=useState<Course[]>([]),[res,setRes]=useState<Record<number,Resource[]>>({}),[error,setError]=useState("")
- const role=localStorage.getItem("role")||"student",name=localStorage.getItem("name")||"User"
+ const role=localStorage.getItem("role")||"student"
  useEffect(()=>{const t=localStorage.getItem("token");if(!t){navigate("/login");return}load(t)},[navigate])
  async function load(t:string){try{const all=await fetch(API+"/courses").then(r=>r.json());setCourses(all);const m=role==="student"?await fetch(API+"/my-courses",{headers:{Authorization:"Bearer "+t}}).then(r=>r.json()):all.filter((c:Course)=>c.teacher_id===Number(localStorage.getItem("userId")));setMine(m);const pairs=await Promise.all(m.map(async(c:Course)=>[c.id,await fetch(API+"/courses/"+c.id+"/resources",{headers:{Authorization:"Bearer "+t}}).then(r=>r.ok?r.json():[])] as const));setRes(Object.fromEntries(pairs))}catch{setError("Failed to load courses")}}
  async function enroll(id:number){const t=localStorage.getItem("token");if(!t)return;const r=await fetch(API+"/enroll",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+t},body:JSON.stringify({course_id:id})});if(r.ok)load(t)}
