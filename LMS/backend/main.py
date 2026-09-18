@@ -27,6 +27,7 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS start_time TIMESTAMP"))
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP"))
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER"))
+    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS section VARCHAR DEFAULT 'Unassigned'"))
 
 app = FastAPI(title="LMS")
 app.add_middleware(
@@ -58,7 +59,7 @@ def register(data: Register, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Roll number already registered")
     if data.role not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role")
-    user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role)
+    user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role, section=data.section.strip() or "Unassigned")
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -71,6 +72,31 @@ def login(data: Login, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid roll number or password")
     token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
     return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+
+@app.get("/profile")
+def profile(user=Depends(get_user), db: Session = Depends(get_db)):
+    account = db.query(User).filter(User.id == user["id"]).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if account.role == "student":
+        course_rows = db.query(Course).join(Enrollment, Enrollment.course_id == Course.id).filter(Enrollment.student_id == account.id).all()
+        ids = [c.id for c in course_rows]
+        assignments = db.query(Assignment).filter(Assignment.course_id.in_(ids)).all() if ids else []
+    elif account.role == "teacher":
+        course_rows = db.query(Course).filter(Course.teacher_id == account.id).all()
+        assignments = db.query(Assignment).filter(Assignment.teacher_id == account.id).all()
+    else:
+        course_rows = db.query(Course).all()
+        assignments = db.query(Assignment).all()
+    now = datetime.now()
+    upcoming = []
+    for a in assignments:
+        deadline = assessment_deadline(a)
+        if deadline and deadline > now:
+            course = db.query(Course).filter(Course.id == a.course_id).first()
+            upcoming.append({"id": a.id, "title": a.title, "type": a.type, "course": course.title if course else "Course", "start_time": a.start_time, "deadline": deadline})
+    upcoming.sort(key=lambda x: x["deadline"])
+    return {"id": account.id, "name": account.name, "email": account.email, "role": account.role, "section": account.section or "Unassigned", "courses": [{"id": c.id, "title": c.title, "description": c.description} for c in course_rows], "upcoming": upcoming[:6]}
 
 @app.get("/student")
 def student(user=Depends(get_user)):
