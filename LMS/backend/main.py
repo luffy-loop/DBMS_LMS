@@ -9,6 +9,7 @@ from schemas import Register, Login, CourseCreate, EnrollmentCreate
 from auth import get_user
 from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
 from mongodb import mongo_db
+from vector_store import search_resources
 
 Base.metadata.create_all(bind=engine)
 
@@ -358,3 +359,32 @@ def get_resources(course_id: int):
     )
 
     return resources
+
+@app.get("/admin/users")
+def admin_users(user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    return [{"id": u.id, "name": u.name, "roll_no": u.email, "role": u.role} for u in db.query(User).all()]
+
+@app.get("/admin/overview")
+def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    return {
+        "users": db.query(User).count(),
+        "students": db.query(User).filter(User.role == "student").count(),
+        "teachers": db.query(User).filter(User.role == "teacher").count(),
+        "admins": db.query(User).filter(User.role == "admin").count(),
+        "courses": db.query(Course).count(),
+        "assignments": db.query(Assignment).count(),
+        "submissions": db.query(Submission).count()
+    }
+
+@app.get("/ai-search")
+def ai_search(q: str, user=Depends(get_user)):
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+    try:
+        return {"query": q, "results": search_resources(q)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Search service unavailable: {exc}")

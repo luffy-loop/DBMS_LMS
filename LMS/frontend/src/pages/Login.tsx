@@ -41,10 +41,12 @@ export default function Login() {
       localStorage.setItem("userId", data.id)
 
       if (data.role === "teacher") {
-  navigate("/teacher")
-} else {
-  navigate("/dashboard")
-}
+        navigate("/teacher")
+      } else if (data.role === "admin") {
+        navigate("/admin")
+      } else {
+        navigate("/dashboard")
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed")
     } finally {

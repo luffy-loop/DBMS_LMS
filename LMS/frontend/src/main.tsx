@@ -11,6 +11,8 @@ import Courses from "./pages/Courses"
 import TeacherDashboard from "./pages/TeacherDashboard"
 import Assignments from "./pages/Assignments"
 import Marks from "./pages/Marks"
+import Admin from "./pages/Admin"
+import AISearch from "./pages/AISearch"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -24,6 +26,8 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/assignments" element={<Assignments />} />
         <Route path="/marks" element={<Marks />} />
+        <Route path="/admin" element={<Admin />} />
+        <Route path="/search" element={<AISearch />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>
