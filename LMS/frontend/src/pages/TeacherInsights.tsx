@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import {useEffect,useState} from "react"
 import {BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,User,BarChart3,Clock3,CheckCircle2,TrendingUp} from "lucide-react"
 import {useNavigate} from "react-router-dom"
@@ -17,6 +18,6 @@ export default function TeacherInsights(){
 </div>
 }
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div></div>}
-function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
-function Stat({icon,label,value}:{icon:React.ReactNode;label:string;value:number|string}){return <div className="lms-stat rounded-2xl p-5"><div className="lms-icon mb-5 flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><p className="text-sm text-white/40">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p>
+function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
+function Stat({icon,label,value}:{icon:ReactNode;label:string;value:number|string}){return <div className="lms-stat rounded-2xl p-5"><div className="lms-icon mb-5 flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><p className="text-sm text-white/40">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p>
   </div>}

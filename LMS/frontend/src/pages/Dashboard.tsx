@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import {
   BookOpen,
@@ -460,7 +461,7 @@ function StatCard({
   title,
   value
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   title: string
   value: number
 }) {

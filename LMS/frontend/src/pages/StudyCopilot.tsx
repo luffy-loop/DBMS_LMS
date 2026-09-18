@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, Sparkles, BrainCircuit, FileText, CheckCircle2, RotateCcw } from "lucide-react"
@@ -72,4 +73,4 @@ export default function StudyCopilot(){
   </main>
  </div>
 }
-function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
+function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}

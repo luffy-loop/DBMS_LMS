@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { BookOpen, LayoutDashboard, Users, Search, LogOut, User, ClipboardList, FileText, GraduationCap, ShieldCheck, Check } from "lucide-react"
 import { useNavigate } from "react-router-dom"
@@ -37,4 +38,4 @@ export default function Admin(){
  </div>
  <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-5"><div className="flex items-center gap-2 text-white/70"><ShieldCheck size={17}/><p className="text-sm font-medium">Registered admins</p></div><div className="mt-4 grid gap-3 sm:grid-cols-3">{users.filter(u=>u.role==="admin").map(u=><div key={u.id} className="rounded-xl border border-white/8 p-3 text-sm"><p>{u.name}</p><p className="mt-1 text-xs text-white/30">{u.roll_no}</p></div>)}</div></div></>}</section></main></div>
 }
-function Stat({icon,title,value}:{icon:React.ReactNode;title:string;value:number}){return <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-5"><div className="mb-5 flex h-10 w-10 items-center justify-center rounded-xl bg-white/10">{icon}</div><p className="text-sm text-white/40">{title}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>}
+function Stat({icon,title,value}:{icon:ReactNode;title:string;value:number}){return <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-5"><div className="mb-5 flex h-10 w-10 items-center justify-center rounded-xl bg-white/10">{icon}</div><p className="text-sm text-white/40">{title}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>}

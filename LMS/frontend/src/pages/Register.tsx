@@ -1,3 +1,4 @@
+import type { FormEvent, ReactNode } from "react"
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
@@ -13,7 +14,7 @@ export default function Register() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  async function register(e: React.FormEvent) {
+  async function register(e: FormEvent) {
     e.preventDefault()
     setError("")
     setMessage("")
@@ -80,6 +81,6 @@ export default function Register() {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return <div><label className="mb-2 block text-sm text-white/60">{label}</label>{children}</div>
 }

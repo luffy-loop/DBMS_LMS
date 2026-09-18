@@ -1,3 +1,4 @@
+import type { FormEvent } from "react"
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
@@ -12,7 +13,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  async function login(e: React.FormEvent) {
+  async function login(e: FormEvent) {
     e.preventDefault()
     setError("")
     setLoading(true)

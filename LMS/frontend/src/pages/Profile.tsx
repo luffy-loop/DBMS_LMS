@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import MobileNav from "../components/MobileNav"
@@ -92,8 +93,8 @@ export default function Profile(){
 }
 
 function Brand({role}:{role:string}){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40 capitalize">{role} Workspace</p></div></div>}
-function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
-function Info({label,value,icon}:{label:string;value:string;icon:React.ReactNode}){return <div className="profile-info lms-stat rounded-2xl p-5"><div className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><p className="mt-4 text-xs uppercase tracking-wider text-white/30">{label}</p><p className="mt-1 truncate text-sm font-medium capitalize">{value}</p>
+function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
+function Info({label,value,icon}:{label:string;value:string;icon:ReactNode}){return <div className="profile-info lms-stat rounded-2xl p-5"><div className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><p className="mt-4 text-xs uppercase tracking-wider text-white/30">{label}</p><p className="mt-1 truncate text-sm font-medium capitalize">{value}</p>
   </div>}
 function RoleIcon({role}:{role:string}){return role==="teacher"?<Users size={20}/>:role==="admin"?<ShieldCheck size={20}/>:<GraduationCap size={20}/>}
 function formatDay(v:string){return new Date(v).toLocaleDateString("en-IN",{day:"2-digit"})}

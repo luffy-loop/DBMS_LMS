@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useEffect,useState } from "react"
 import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Check,FileText,Download } from "lucide-react"
 import { useNavigate } from "react-router-dom"
@@ -20,4 +21,4 @@ export default function Courses(){
 }
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div>
   </div>}
-function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"nav "+(active?"active":"")}>{icon}{text}</button>}
+function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:ReactNode;text:string}){return <button onClick={onClick} className={"nav "+(active?"active":"")}>{icon}{text}</button>}

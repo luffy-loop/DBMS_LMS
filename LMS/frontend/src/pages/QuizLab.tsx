@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { useState } from "react"
 import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, BrainCircuit, Sparkles, RotateCcw, CheckCircle2, XCircle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
@@ -85,4 +86,4 @@ export default function QuizLab(){
   </div>
 }
 
-function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
+function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
