@@ -168,12 +168,14 @@ export default function TeacherDashboard(){
    </div>}
   </main>
     
-  </div>
+  
+    <MobileNav role={"teacher"} active="dashboard" />
+</div>
 }
 
 function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Teacher Workspace</p></div></div>}
 function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
 function Field({label,children}:{label:string;children:React.ReactNode}){return <div><label className="mb-2 block text-sm font-medium text-white/60">{label}</label>{children}</div>}
 function Stat({icon,title,value,detail}:{icon:React.ReactNode;title:string;value:number;detail:string}){return <div className="lms-stat rounded-2xl p-5"><div className="flex items-start justify-between"><div className="lms-icon flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><span className="text-xs text-white/20">LIVE</span></div><p className="mt-5 text-sm text-white/40">{title}</p><p className="mt-1 text-2xl font-semibold">{value}</p><p className="mt-1 text-xs text-white/25">{detail}</p></div>}
-function Msg({text,ok=false}:{text:string;ok?:boolean}){return <div className={"mb-6 rounded-xl border px-4 py-3 text-sm "+(ok?"border-emerald-400/20 bg-emerald-400/10 text-emerald-300":"border-red-400/20 bg-red-400/10 text-red-300")}>{text}    <MobileNav role={"teacher"} active="dashboard" />
+function Msg({text,ok=false}:{text:string;ok?:boolean}){return <div className={"mb-6 rounded-xl border px-4 py-3 text-sm "+(ok?"border-emerald-400/20 bg-emerald-400/10 text-emerald-300":"border-red-400/20 bg-red-400/10 text-red-300")}>{text}
   </div>}
