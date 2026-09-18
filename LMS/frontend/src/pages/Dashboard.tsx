@@ -14,8 +14,8 @@ import {
   TrendingUp
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { API } from "../config"
 
-const API = "http://127.0.0.1:8000"
 
 type Course = {
   id: number
