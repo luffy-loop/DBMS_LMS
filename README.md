@@ -1,84 +1,281 @@
 # DBMS LMS
 
-A distributed Learning Management System built to explore scalable backend architecture, database integration, and AI-assisted learning workflows.
+A full-stack Learning Management System built with React, FastAPI, PostgreSQL, MongoDB, and AI-powered search and study tools.
 
-## Overview
+DBMS LMS brings student, teacher, and admin workflows into one platform while combining relational data, document storage, vector search, and AI-assisted learning features.
 
-DBMS LMS brings common learning workflows into a single platform for students and teachers, including course management, assessments, marks, and AI-assisted study features.
+## Live Demo
 
-The project was developed as a full-stack database-focused system with an emphasis on separating frontend, backend, and data responsibilities.
+**Frontend:**  
+https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app/
 
-## Features
+**Repository:**  
+https://github.com/luffy-loop/DBMS_LMS
 
-- Student and teacher workflows
-- Course management
-- Assessments and marks
-- AI-assisted learning features
-- Search and study assistance
-- Dashboard views for different users
-- Database-backed application workflows
+## What It Does
+
+### Student
+- Register and log in with role-based access
+- Browse and enroll in courses
+- View course resources
+- Submit assignments and PDF work
+- Take timed assessments
+- Track deadlines and submission status
+- View marks and academic progress
+- Use AI Search and Study Copilot
+- Generate AI-assisted quizzes
+
+### Teacher
+- Create and manage courses
+- Upload course resources and assignment handouts
+- Create assignments and timed tests
+- View student submissions
+- Grade submissions and publish marks
+- Track assessment and grading statistics
+- View teacher learning insights
+
+### Admin
+- Protected admin authentication and role-based access
+- Access the admin area for platform-level workflows
+
+## AI Features
+
+The project extends a conventional LMS with AI-assisted learning workflows:
+
+- **AI Search** — semantic search across learning resources
+- **Study Copilot** — contextual study assistance
+- **Quiz Generator** — AI-assisted quiz creation
+- **Learning Insights** — student learning analytics
+- **Teacher Insights** — assessment and grading analytics
+- **Vector Search** — resource retrieval using embeddings
+
+PDF resources can be processed and stored for retrieval and AI-assisted workflows.
 
 ## Architecture
 
+The current implementation is organized as a layered full-stack application:
+
 ```
-Frontend
-   |
-   v
-Backend API
-   |
-   v
-Database
-   |
-   +---- Learning data
-   +---- User data
-   +---- Assessment data
+React + TypeScript + Vite
+          |
+          v
+       FastAPI
+          |
+    +-----+-----+
+    |           |
+    v           v
+PostgreSQL   MongoDB
+    |           |
+    |           +---- PDF / resource data
+    |
+    +---- Users
+    +---- Courses
+    +---- Enrollments
+    +---- Assessments
+    +---- Submissions
+    +---- Marks
+
+          FastAPI AI Modules
+                 |
+                 v
+        Vector Search / Embeddings
 ```
 
-The repository is organized around separate application layers so the frontend, backend services, and database logic can evolve independently.
+### Data responsibilities
+
+**PostgreSQL**
+- Users and roles
+- Courses
+- Enrollments
+- Assignments and tests
+- Submissions
+- Marks
+
+**MongoDB**
+- Uploaded resources
+- PDF/assignment files
+- Document-oriented learning content
+
+**Vector layer**
+- Embeddings and semantic retrieval for learning resources
+
+## Authentication & Authorization
+
+Authentication uses JWT-based login with password hashing.
+
+Access is controlled by application roles:
+
+```
+Student  -> student workflows
+Teacher  -> teaching workflows
+Admin    -> admin workflows
+```
+
+Protected endpoints validate the authenticated user's role before allowing access to role-specific operations.
 
 ## Tech Stack
 
-**Frontend**
+### Frontend
+- React 19
 - TypeScript
 - Vite
+- React Router
+- Tailwind CSS
+- Motion
+- Lucide React
 
-**Backend**
-- Backend API services
-- Database integration
+### Backend
+- Python
+- FastAPI
+- SQLAlchemy
+- Uvicorn
+- JWT authentication
+- Passlib password hashing
 
-**Database**
+### Databases & AI
 - PostgreSQL
 - MongoDB
+- ChromaDB
+- Sentence Transformers
+- PyPDF
 
-**Development**
-- Git
-- GitHub
+### Deployment
 - Vercel
 
 ## Project Structure
 
 ```
-frontend/
-backend/
-database/
+DBMS_LMS/
+├── LMS/
+│   ├── frontend/
+│   │   └── React + TypeScript application
+│   └── backend/
+│       ├── main.py
+│       ├── models.py
+│       ├── schemas.py
+│       ├── database.py
+│       ├── mongodb.py
+│       ├── auth.py
+│       ├── vector_store.py
+│       ├── learning_insights.py
+│       ├── study_copilot.py
+│       ├── quiz_generator.py
+│       └── teacher_insights.py
+├── Lab*.sql / Lab*.js
+├── DBMS LMS1.pptx
+├── Distributed_Learning_Management_System_with_Scalable_Backend_Architecture.pdf
+└── README.md
 ```
 
-Additional project components and configuration are contained within their respective directories.
+## Core Workflow
 
-## What I Learned
+```
+Register / Login
+      |
+      v
+Role-based Dashboard
+      |
+      +--> Student --> Enroll --> Learn --> Submit --> View Marks
+      |
+      +--> Teacher --> Create Course --> Create Assessment --> Grade
+      |
+      +--> Admin --> Platform Administration
 
-This project helped me work with:
+Learning Resources
+      |
+      v
+PDF Processing
+      |
+      v
+Embeddings / Vector Search
+      |
+      v
+AI Search / Study Copilot / Quiz Generation
+```
 
-- Database-backed application design
-- Full-stack integration
-- API and frontend communication
-- Role-based application workflows
+## Database Design
+
+The system intentionally uses different storage models for different workloads.
+
+**PostgreSQL** handles structured relational data where relationships and transactional consistency matter.
+
+**MongoDB** handles document-oriented resources and uploaded learning content.
+
+**Vector search** supports semantic retrieval over learning resources instead of relying only on keyword matching.
+
+This combination demonstrates polyglot persistence within a single learning platform.
+
+## Current Status
+
+The core LMS workflow is implemented and deployed, including authentication, role-based access, courses, enrollment, resources, assignments, timed tests, submissions, grading, marks, AI search, study assistance, quiz generation, and analytics.
+
+The project is still being extended toward a more independently deployable distributed backend architecture.
+
+## Known Architecture Gap
+
+The project specification explores distributed and scalable backend architecture. The current repository is **not yet a collection of independently deployed microservices**; the main application currently runs through a FastAPI backend with modular routers and supporting database/AI components.
+
+Future architecture work can split independently scalable responsibilities such as:
+
+```
+Frontend
+   |
+API / Gateway
+   |
+   +---- Core LMS Service
+   +---- AI / Search Service
+   +---- Analytics Service
+   |
+   +---- PostgreSQL
+   +---- MongoDB + Vector Store
+```
+
+This section is intentionally explicit so the repository reflects the implementation accurately rather than overstating the current architecture.
+
+## Running Locally
+
+### Backend
+
+```bash
+cd LMS/backend
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+Configure the required database, MongoDB, JWT, and AI/vector environment variables before starting the backend.
+
+### Frontend
+
+```bash
+cd LMS/frontend
+npm install
+npm run dev
+```
+
+The frontend communicates with the FastAPI backend through the configured API endpoint.
+
+## What This Project Demonstrates
+
+- Full-stack application development
+- Relational database design
+- NoSQL document storage
+- Vector search and embeddings
+- JWT authentication and RBAC
+- File and PDF processing
 - AI feature integration
-- Debugging and production deployment
+- REST API development
+- React/TypeScript frontend engineering
+- Deployment and production debugging
+- Designing toward scalable backend architecture
 
-## Status
+## Future Work
 
-Actively developed as a database systems and full-stack engineering project.
+- Independently deployable backend services
+- Docker-based local development and deployment
+- Notification service
+- More complete admin management
+- Automated backend and frontend CI
+- Expanded observability and analytics
 
 ## Author
 
