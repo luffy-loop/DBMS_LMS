@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+python-dotenv
+python-jose
+passlib
+email-validator
+pymongo
+chromadb>=1.0,<2.0
+sentence-transformers>=5.1,<6.1
+pypdf
+python-multipart
