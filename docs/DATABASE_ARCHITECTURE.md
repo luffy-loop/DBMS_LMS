@@ -15,7 +15,6 @@ System-of-record data:
 - submissions
 - relational constraints and transactions
 - analytical views and SQL reporting
-- vector embeddings through pgvector
 
 ### MongoDB
 
@@ -26,38 +25,36 @@ Flexible course-resource data:
 - variable resource fields
 - activity/resource documents
 
-### pgvector
+### Local semantic search
 
-Semantic retrieval data:
+The LMS keeps semantic resource retrieval separate from the relational database. Course and MongoDB resources are converted into embeddings with the Sentence Transformer model `all-MiniLM-L6-v2` and stored in a local ChromaDB collection.
 
-Course or MongoDB resource -> title and content -> Sentence Transformer (all-MiniLM-L6-v2) -> 384-dimensional embedding -> PostgreSQL + pgvector -> cosine similarity search -> Study Copilot / AI Quiz
-
-The vector table is resource_embeddings.
+This keeps PostgreSQL focused on transactional and analytical DBMS responsibilities while ChromaDB handles vector retrieval.
 
 ## Relational analytics
 
 The PostgreSQL upgrade adds:
 
-- student_course_progress view
-- course_performance view
-- assignment_submission_summary view
+- `student_course_progress` view
+- `course_performance` view
+- `assignment_submission_summary` view
 - CTE-based student score analysis
-- RANK() and DENSE_RANK() course leaderboards
-- ROW_NUMBER() submission sequencing
+- `RANK()` and `DENSE_RANK()` course leaderboards
+- `ROW_NUMBER()` submission sequencing
 - running averages using window frames
 
-The SQL implementation is in LMS/database/co1_co2_upgrade.sql.
+The SQL implementation is in `LMS/database/co1_co2_upgrade.sql`.
 
 ## API analytics
 
 FastAPI exposes the database analytics through:
 
-- GET /analytics/course-performance
-- GET /analytics/student-progress
-- GET /analytics/leaderboard/{course_id}
+- `GET /analytics/course-performance`
+- `GET /analytics/student-progress`
+- `GET /analytics/leaderboard/{course_id}`
 
 These endpoints read from PostgreSQL views and CTE/window-function queries rather than duplicating analytics logic in application code.
 
 ## Why this design
 
-PostgreSQL remains authoritative for entities that require relationships, constraints and transactions. MongoDB is used where document shape can vary. pgvector keeps semantic retrieval close to the relational system so course access rules and vector search can be combined in one backend.
+PostgreSQL remains authoritative for entities that require relationships, constraints and transactions. MongoDB is used where document shape can vary. ChromaDB is used for semantic retrieval without adding a PostgreSQL extension dependency.

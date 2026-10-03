@@ -1,11 +1,12 @@
 import re
 from functools import lru_cache
 
-from sqlalchemy.orm import Session
+import chromadb
 
-from database import SessionLocal
-from models import Course, ResourceEmbedding
 from mongodb import mongo_db
+
+client = chromadb.PersistentClient(path="./vector_data")
+collection = client.get_or_create_collection("lms_resources")
 
 
 @lru_cache(maxsize=1)
@@ -15,6 +16,9 @@ def get_model():
 
 
 def _resources(course_ids=None):
+    from database import SessionLocal
+    from models import Course
+
     db = SessionLocal()
     try:
         resources = []
@@ -55,40 +59,28 @@ def _sync_resources(resources):
         return
 
     model = get_model()
-    db = SessionLocal()
-    try:
-        for item in resources:
-            source = f'{item["title"]}. {item["content"]}'
-            row = (
-                db.query(ResourceEmbedding)
-                .filter(ResourceEmbedding.source_id == item["id"])
-                .first()
-            )
+    ids = [item["id"] for item in resources]
+    existing = collection.get(ids=ids, include=["documents"])
+    old = dict(zip(existing["ids"], existing.get("documents") or []))
+    changed = [
+        item
+        for item in resources
+        if old.get(item["id"]) != f'{item["title"]}. {item["content"]}'
+    ]
 
-            if row and row.content == item["content"] and row.title == item["title"]:
-                continue
+    if not changed:
+        return
 
-            vector = model.encode(source).tolist()
-
-            if row:
-                row.title = item["title"]
-                row.content = item["content"]
-                row.source_type = item["type"]
-                row.course_id = item["course_id"]
-                row.embedding = vector
-            else:
-                db.add(ResourceEmbedding(
-                    source_id=item["id"],
-                    source_type=item["type"],
-                    course_id=item["course_id"],
-                    title=item["title"],
-                    content=item["content"],
-                    embedding=vector,
-                ))
-
-        db.commit()
-    finally:
-        db.close()
+    docs = [f'{item["title"]}. {item["content"]}' for item in changed]
+    collection.upsert(
+        ids=[item["id"] for item in changed],
+        documents=docs,
+        metadatas=[
+            {"type": item["type"], "course_id": str(item["course_id"])}
+            for item in changed
+        ],
+        embeddings=model.encode(docs).tolist(),
+    )
 
 
 def _lexical_search(query, resources):
@@ -123,39 +115,19 @@ def search_resources(query, course_ids=None):
         _sync_resources(resources)
 
         model = get_model()
-        query_vector = model.encode(query).tolist()
+        result = collection.query(
+            query_embeddings=[model.encode(query).tolist()],
+            ids=[item["id"] for item in resources],
+            n_results=min(8, len(resources)),
+            include=["documents", "metadatas", "distances"],
+        )
 
-        db: Session = SessionLocal()
-        try:
-            q = db.query(ResourceEmbedding)
-            if course_ids is not None:
-                q = q.filter(ResourceEmbedding.course_id.in_(course_ids))
-
-            distance = ResourceEmbedding.embedding.cosine_distance(query_vector)
-            if course_ids is not None:
-                rows = (
-                    q.add_columns(distance.label("distance"))
-                    .order_by(distance)
-                    .limit(8)
-                    .all()
-                )
-            else:
-                rows = (
-                    db.query(ResourceEmbedding, distance.label("distance"))
-                    .order_by(distance)
-                    .limit(8)
-                    .all()
-                )
-
-            return [{
-                "title": row.title,
-                "content": f"{row.title}. {row.content}",
-                "type": row.source_type,
-                "course_id": int(row.course_id or 0),
-                "distance": round(float(distance_value), 4),
-            } for row, distance_value in rows]
-        finally:
-            db.close()
-
+        return [{
+            "title": doc.split(". ", 1)[0],
+            "content": doc,
+            "type": result["metadatas"][0][i]["type"],
+            "course_id": int(result["metadatas"][0][i]["course_id"]),
+            "distance": round(float(result["distances"][0][i]), 4),
+        } for i, doc in enumerate(result["documents"][0])]
     except Exception:
         return _lexical_search(query, resources)

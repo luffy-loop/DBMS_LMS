@@ -1,8 +1,6 @@
 -- DBMS_LMS CO1 + CO2 upgrade
--- PostgreSQL 14+ / pgvector
+-- PostgreSQL 14+
 -- Run after Lab1_BookFlow.sql and Lab2_BookFlow.sql
-
-CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Stronger relational integrity
 ALTER TABLE enrollments
@@ -158,29 +156,3 @@ SELECT
 FROM submissions
 WHERE marks IS NOT NULL
 ORDER BY student_id, id;
-
--- pgvector storage for course resources
-CREATE TABLE IF NOT EXISTS resource_embeddings (
-    id BIGSERIAL PRIMARY KEY,
-    source_id VARCHAR(255) NOT NULL,
-    source_type VARCHAR(50) NOT NULL,
-    course_id INTEGER,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    embedding VECTOR(384) NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_resource_embedding_source UNIQUE (source_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_resource_embeddings_course
-    ON resource_embeddings(course_id);
-
-CREATE INDEX IF NOT EXISTS idx_resource_embeddings_vector
-    ON resource_embeddings
-    USING hnsw (embedding vector_cosine_ops);
-
--- Example similarity search:
--- SELECT source_id, title, 1 - (embedding <=> '[...]') AS similarity
--- FROM resource_embeddings
--- ORDER BY embedding <=> '[...]'
--- LIMIT 8;
