@@ -21,9 +21,6 @@ from quiz_generator import router as quiz_router
 from teacher_insights import router as teacher_insights_router
 from analytics import router as analytics_router
 
-with engine.begin() as conn:
-    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-
 Base.metadata.create_all(bind=engine)
 
 with engine.begin() as conn:
