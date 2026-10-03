@@ -131,23 +131,29 @@ def search_resources(query, course_ids=None):
             if course_ids is not None:
                 q = q.filter(ResourceEmbedding.course_id.in_(course_ids))
 
-            rows = (
-                q.order_by(ResourceEmbedding.embedding.cosine_distance(query_vector))
-                .limit(8)
-                .all()
-            )
+            distance = ResourceEmbedding.embedding.cosine_distance(query_vector)
+            if course_ids is not None:
+                rows = (
+                    q.add_columns(distance.label("distance"))
+                    .order_by(distance)
+                    .limit(8)
+                    .all()
+                )
+            else:
+                rows = (
+                    db.query(ResourceEmbedding, distance.label("distance"))
+                    .order_by(distance)
+                    .limit(8)
+                    .all()
+                )
 
             return [{
                 "title": row.title,
                 "content": f"{row.title}. {row.content}",
                 "type": row.source_type,
                 "course_id": int(row.course_id or 0),
-                "distance": round(
-                    float(row.embedding.cosine_distance(query_vector))
-                    if row.embedding is not None else 1.0,
-                    4,
-                ),
-            } for row in rows]
+                "distance": round(float(distance_value), 4),
+            } for row, distance_value in rows]
         finally:
             db.close()
 
