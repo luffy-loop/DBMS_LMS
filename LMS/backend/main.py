@@ -19,6 +19,10 @@ from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
 from quiz_generator import router as quiz_router
 from teacher_insights import router as teacher_insights_router
+from analytics import router as analytics_router
+
+with engine.begin() as conn:
+    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
 Base.metadata.create_all(bind=engine)
 
@@ -41,6 +45,7 @@ app.include_router(learning_router)
 app.include_router(copilot_router)
 app.include_router(quiz_router)
 app.include_router(teacher_insights_router)
+app.include_router(analytics_router)
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
