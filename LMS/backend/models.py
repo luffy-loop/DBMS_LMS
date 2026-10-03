@@ -1,5 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, UniqueConstraint, CheckConstraint, Text
-from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, UniqueConstraint, CheckConstraint
 from database import Base
 
 class User(Base):
@@ -49,13 +48,3 @@ class Submission(Base):
     answer = Column(String, nullable=False)
     marks = Column(Integer, nullable=True)
     __table_args__ = (UniqueConstraint("assignment_id", "student_id", name="uq_submission_assignment_student"),)
-
-class ResourceEmbedding(Base):
-    __tablename__ = "resource_embeddings"
-    id = Column(Integer, primary_key=True)
-    source_id = Column(String(255), nullable=False, unique=True, index=True)
-    source_type = Column(String(50), nullable=False)
-    course_id = Column(Integer, nullable=True, index=True)
-    title = Column(Text, nullable=False)
-    content = Column(Text, nullable=False)
-    embedding = Column(Vector(384), nullable=False)
