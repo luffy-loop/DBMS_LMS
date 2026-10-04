@@ -20,6 +20,10 @@ from study_copilot import router as copilot_router
 from quiz_generator import router as quiz_router
 from teacher_insights import router as teacher_insights_router
 from analytics import router as analytics_router
+from exam_evaluation import router as exam_router, evaluate_and_record_exam
+
+with engine.begin() as conn:
+    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
 
 Base.metadata.create_all(bind=engine)
 
@@ -29,6 +33,12 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP"))
     conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER"))
     conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS section VARCHAR DEFAULT 'Unassigned'"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS evaluator_confidence DOUBLE PRECISION"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) DEFAULT 'auto_finalized'"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_override_marks DOUBLE PRECISION"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_review_note TEXT"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL"))
 
 app = FastAPI(title="LMS")
 app.add_middleware(
@@ -43,6 +53,8 @@ app.include_router(copilot_router)
 app.include_router(quiz_router)
 app.include_router(teacher_insights_router)
 app.include_router(analytics_router)
+app.include_router(exam_router)
+
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -122,7 +134,10 @@ def teacher_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     assessments = db.query(Assignment).filter(Assignment.teacher_id == user["id"]).count()
     submissions = db.query(Submission).filter(Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
     pending = db.query(Submission).filter(Submission.marks == None, Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
-    pdfs = mongo_db.resources.count_documents({"teacher_id": user["id"], "assignment_id": {"$exists": False}})
+    try:
+        pdfs = mongo_db.resources.count_documents({"teacher_id": user["id"], "assignment_id": {"$exists": False}})
+    except Exception:
+        pdfs = 0
     return {"courses": len(course_ids), "assessments": assessments, "course_pdfs": pdfs, "submissions": submissions, "pending_grading": pending}
 
 @app.get("/admin")
@@ -182,7 +197,7 @@ async def create_assignment(
 ):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    if type not in ["assignment", "test"]:
+    if type not in ["assignment", "test", "exam"]:
         raise HTTPException(status_code=400, detail="Invalid assessment type")
     if start_time and end_time and end_time <= start_time:
         raise HTTPException(status_code=400, detail="End time must be after start time")
@@ -267,10 +282,14 @@ def db_submission_exists(assignment_id, student_id):
         db.close()
 
 def assessment_payload(assignment, student_id=None):
-    handout = mongo_db.resources.find_one(
-        {"assignment_id": assignment.id},
-        {"_id": 1, "title": 1, "filename": 1}
-    )
+    handout = None
+    try:
+        handout = mongo_db.resources.find_one(
+            {"assignment_id": assignment.id},
+            {"_id": 1, "title": 1, "filename": 1}
+        )
+    except Exception:
+        handout = None
     return {
         "id": assignment.id,
         "title": assignment.title,
@@ -307,6 +326,7 @@ def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depend
 async def submit_assignment(
     assignment_id: int = Form(...),
     answer: str = Form(""),
+    answers_json: str | None = Form(None),
     file: UploadFile | None = File(None),
     user=Depends(get_user),
     db: Session = Depends(get_db)
@@ -343,17 +363,40 @@ async def submit_assignment(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid PDF file")
 
-    if not answer.strip() and not file_data:
-        raise HTTPException(status_code=400, detail="Write an answer or upload a PDF")
+    if not answer.strip() and not file_data and not answers_json:
+        raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
 
-    submission = Submission(
-        assignment_id=assignment.id,
-        student_id=user["id"],
-        answer=answer.strip()
-    )
-    db.add(submission)
-    db.commit()
-    db.refresh(submission)
+    from models import AssessmentQuestion
+    has_questions = db.query(AssessmentQuestion).filter(AssessmentQuestion.assignment_id == assignment.id).first() is not None
+
+    if answers_json or has_questions:
+        import json
+        answers_list = []
+        if answers_json:
+            try:
+                answers_list = json.loads(answers_json)
+            except Exception:
+                answers_list = []
+        answers_map = {
+            item.get("question_id"): {
+                "selected_option_id": item.get("selected_option_id"),
+                "student_answer": item.get("student_answer")
+            }
+            for item in answers_list if isinstance(item, dict) and item.get("question_id")
+        }
+        submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+        if answer.strip():
+            submission.answer = f"{answer.strip()} | {submission.answer}"
+            db.commit()
+    else:
+        submission = Submission(
+            assignment_id=assignment.id,
+            student_id=user["id"],
+            answer=answer.strip()
+        )
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
 
     if file_data:
         mongo_db.submission_files.insert_one({
@@ -366,19 +409,50 @@ async def submit_assignment(
             "created_at": datetime.utcnow()
         })
 
-    return {"message": "Submission successful", "id": submission.id}
+    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks}
 
-def submission_payload(submission):
-    file_doc = mongo_db.submission_files.find_one(
-        {"submission_id": submission.id},
-        {"_id": 1, "filename": 1}
-    )
+def submission_payload(submission, db: Session | None = None):
+    file_doc = None
+    try:
+        file_doc = mongo_db.submission_files.find_one(
+            {"submission_id": submission.id},
+            {"_id": 1, "filename": 1}
+        )
+    except Exception:
+        file_doc = None
+    from models import StudentQuestionAnswer
+    close_db = False
+    if db is None:
+        from database import SessionLocal
+        db = SessionLocal()
+        close_db = True
+
+    max_marks = None
+    asgn_title = None
+    student_name = None
+    try:
+        asgn = db.query(Assignment).filter(Assignment.id == submission.assignment_id).first()
+        if asgn:
+            asgn_title = asgn.title
+        student = db.query(User).filter(User.id == submission.student_id).first()
+        if student:
+            student_name = student.name
+        sqas = db.query(StudentQuestionAnswer).filter(StudentQuestionAnswer.submission_id == submission.id).all()
+        if sqas:
+            max_marks = sum(s.max_marks for s in sqas)
+    finally:
+        if close_db:
+            db.close()
+
     return {
         "id": submission.id,
         "assignment_id": submission.assignment_id,
+        "assignment_title": asgn_title,
         "student_id": submission.student_id,
+        "student_name": student_name,
         "answer": submission.answer,
         "marks": submission.marks,
+        "max_marks": max_marks,
         "file_id": str(file_doc["_id"]) if file_doc else None,
         "file_name": file_doc.get("filename", "") if file_doc else None
     }
@@ -387,17 +461,17 @@ def submission_payload(submission):
 def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
-    return [submission_payload(s) for s in db.query(Submission).filter(Submission.student_id == user["id"]).all()]
+    return [submission_payload(s, db) for s in db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()]
 
 @app.get("/teacher/submissions")
-def get_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
+def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
     ids = db.query(Assignment.id).filter(Assignment.teacher_id == user["id"])
-    return [submission_payload(s) for s in db.query(Submission).filter(
-        Submission.marks == None,
-        Submission.assignment_id.in_(ids)
-    ).all()]
+    query = db.query(Submission).filter(Submission.assignment_id.in_(ids))
+    if pending_only:
+        query = query.filter(Submission.marks == None)
+    return [submission_payload(s, db) for s in query.order_by(Submission.id.desc()).all()]
 
 @app.put("/submissions/{submission_id}/marks")
 def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -419,7 +493,7 @@ def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Sessi
 def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
-    return db.query(Submission).filter(Submission.student_id == user["id"]).all()
+    return [submission_payload(s, db) for s in db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()]
 
 @app.post("/courses/{course_id}/resources")
 async def add_resource(course_id: int, file: UploadFile = File(...), title: str = Form(...), user=Depends(get_user), db: Session = Depends(get_db)):

@@ -1,5 +1,30 @@
 venv/
+.venv/
 .env
 __pycache__/
 *.pyc
 backend/vector_data/
+vector_data/
+
+# Test & verification scripts (local-only, not for production)
+backend/test_*.py
+backend/verify_*.py
+
+# NLI / ML model caches
+backend/onnx_models/
+*.onnx
+.cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log

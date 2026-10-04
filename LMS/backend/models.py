@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, UniqueConstraint, CheckConstraint
+from pgvector.sqlalchemy import Vector
 from database import Base
 
 class User(Base):
@@ -48,3 +49,68 @@ class Submission(Base):
     answer = Column(String, nullable=False)
     marks = Column(Integer, nullable=True)
     __table_args__ = (UniqueConstraint("assignment_id", "student_id", name="uq_submission_assignment_student"),)
+
+class AssessmentQuestion(Base):
+    __tablename__ = "assessment_questions"
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True)
+    question_text = Column(String, nullable=False)
+    question_type = Column(String(20), nullable=False)  # 'mcq' or 'descriptive'
+    max_marks = Column(Integer, nullable=False, default=10)
+    order_index = Column(Integer, default=0)
+    correct_option_id = Column(Integer, nullable=True)  # References assessment_question_options.id
+    reference_answer = Column(String, nullable=True)
+    reference_embedding = Column(Vector(384), nullable=True)
+    __table_args__ = (
+        CheckConstraint("max_marks > 0", name="chk_question_max_marks"),
+        CheckConstraint("question_type IN ('mcq', 'descriptive')", name="chk_question_type"),
+    )
+
+class AssessmentQuestionOption(Base):
+    __tablename__ = "assessment_question_options"
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, ForeignKey("assessment_questions.id", ondelete="CASCADE"), nullable=False, index=True)
+    option_text = Column(String, nullable=False)
+    order_index = Column(Integer, default=0)
+
+class AssessmentQuestionRubric(Base):
+    __tablename__ = "assessment_question_rubrics"
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, ForeignKey("assessment_questions.id", ondelete="CASCADE"), nullable=False, index=True)
+    criterion_text = Column(String, nullable=False)
+    max_marks = Column(Float, nullable=False, default=1.0)
+    order_index = Column(Integer, default=0)
+    criterion_embedding = Column(Vector(384), nullable=True)
+    __table_args__ = (
+        CheckConstraint("max_marks > 0", name="chk_rubric_max_marks"),
+    )
+
+class StudentQuestionAnswer(Base):
+    __tablename__ = "student_question_answers"
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False, index=True)
+    question_id = Column(Integer, ForeignKey("assessment_questions.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    question_type = Column(String(20), nullable=False)
+    selected_option_id = Column(Integer, ForeignKey("assessment_question_options.id", ondelete="SET NULL"), nullable=True)
+    is_correct = Column(Boolean, nullable=True)
+    student_answer = Column(String, nullable=True)
+    reference_answer = Column(String, nullable=True)
+    student_embedding = Column(Vector(384), nullable=True)
+    similarity_score = Column(Float, nullable=True)
+    awarded_marks = Column(Float, nullable=False, default=0.0)
+    max_marks = Column(Integer, nullable=False, default=10)
+    evaluation_status = Column(String(30), nullable=False, default="evaluated")
+    evaluated_at = Column(DateTime, nullable=False)
+    evaluator_version = Column(String(50), nullable=True, default="hybrid-v2-nli")
+    evaluator_confidence = Column(Float, nullable=True)
+    review_status = Column(String(30), nullable=False, default="auto_finalized")
+    teacher_override_marks = Column(Float, nullable=True)
+    teacher_review_note = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rubric_evaluation = Column(String, nullable=True)
+    __table_args__ = (
+        UniqueConstraint("submission_id", "question_id", name="uq_submission_question"),
+    )
+
