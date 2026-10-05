@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -21,12 +21,29 @@ import evaluation_service as es
 router = APIRouter(prefix="", tags=["exam_evaluation"])
 
 
+def normalize_datetime(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def get_now() -> datetime:
+    return datetime.now()
+
+
+get_utc_now = get_now
+
+
 def _assessment_deadline(assignment: Assignment):
     deadlines = []
-    if assignment.end_time:
-        deadlines.append(assignment.end_time)
-    if assignment.start_time and assignment.duration_minutes:
-        deadlines.append(assignment.start_time + timedelta(minutes=assignment.duration_minutes))
+    end = normalize_datetime(assignment.end_time)
+    start = normalize_datetime(assignment.start_time)
+    if end:
+        deadlines.append(end)
+    if start and assignment.duration_minutes:
+        deadlines.append(start + timedelta(minutes=assignment.duration_minutes))
     return min(deadlines) if deadlines else None
 
 
@@ -175,6 +192,23 @@ def get_questions(assignment_id: int, user=Depends(get_user), db: Session = Depe
         AssessmentQuestion.assignment_id == assignment.id
     ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
 
+    q_ids = [q.id for q in questions]
+    options_by_qid = {}
+    if q_ids:
+        all_opts = db.query(AssessmentQuestionOption).filter(
+            AssessmentQuestionOption.question_id.in_(q_ids)
+        ).order_by(AssessmentQuestionOption.order_index, AssessmentQuestionOption.id).all()
+        for o in all_opts:
+            options_by_qid.setdefault(o.question_id, []).append(o)
+
+    rubrics_by_qid = {}
+    if q_ids and role != "student":
+        all_rubrics = db.query(AssessmentQuestionRubric).filter(
+            AssessmentQuestionRubric.question_id.in_(q_ids)
+        ).order_by(AssessmentQuestionRubric.order_index, AssessmentQuestionRubric.id).all()
+        for r in all_rubrics:
+            rubrics_by_qid.setdefault(r.question_id, []).append(r)
+
     result = []
     for q in questions:
         if role == "student":
@@ -193,9 +227,7 @@ def get_questions(assignment_id: int, user=Depends(get_user), db: Session = Depe
                 "order_index": q.order_index,
             }
             if q.question_type == "mcq":
-                opts = db.query(AssessmentQuestionOption).filter(
-                    AssessmentQuestionOption.question_id == q.id
-                ).order_by(AssessmentQuestionOption.order_index, AssessmentQuestionOption.id).all()
+                opts = options_by_qid.get(q.id, [])
                 item["options"] = [{"id": o.id, "option_text": o.option_text} for o in opts]
             result.append(item)
         else:
@@ -210,18 +242,14 @@ def get_questions(assignment_id: int, user=Depends(get_user), db: Session = Depe
                 "reference_answer": q.reference_answer,
             }
             if q.question_type == "mcq":
-                opts = db.query(AssessmentQuestionOption).filter(
-                    AssessmentQuestionOption.question_id == q.id
-                ).order_by(AssessmentQuestionOption.order_index, AssessmentQuestionOption.id).all()
+                opts = options_by_qid.get(q.id, [])
                 item["options"] = [{
                     "id": o.id,
                     "option_text": o.option_text,
                     "is_correct": (o.id == q.correct_option_id)
                 } for o in opts]
             elif q.question_type == "descriptive":
-                rubrics = db.query(AssessmentQuestionRubric).filter(
-                    AssessmentQuestionRubric.question_id == q.id
-                ).order_by(AssessmentQuestionRubric.order_index, AssessmentQuestionRubric.id).all()
+                rubrics = rubrics_by_qid.get(q.id, [])
                 item["rubric_criteria"] = [{
                     "id": r.id,
                     "criterion_text": r.criterion_text,
@@ -413,6 +441,15 @@ def evaluate_and_record_exam(
         total_awarded = 0.0
         recorded_answers = []
 
+        desc_q_ids = [q.id for q in questions if q.question_type == "descriptive"]
+        rubrics_by_qid = {}
+        if desc_q_ids:
+            all_rubrics = db.query(AssessmentQuestionRubric).filter(
+                AssessmentQuestionRubric.question_id.in_(desc_q_ids)
+            ).order_by(AssessmentQuestionRubric.order_index, AssessmentQuestionRubric.id).all()
+            for r in all_rubrics:
+                rubrics_by_qid.setdefault(r.question_id, []).append(r)
+
         for q in questions:
             ans_data = answers_map.get(q.id, {})
 
@@ -461,9 +498,7 @@ def evaluate_and_record_exam(
                 raw_answer = ans_data.get("student_answer") or ""
                 clean_ans = raw_answer.strip()
 
-                rubrics = db.query(AssessmentQuestionRubric).filter(
-                    AssessmentQuestionRubric.question_id == q.id
-                ).order_by(AssessmentQuestionRubric.order_index, AssessmentQuestionRubric.id).all()
+                rubrics = rubrics_by_qid.get(q.id, [])
 
                 if not clean_ans or len(clean_ans.split()) < 2:
                     # Unanswered or empty descriptive response -> 0 marks
@@ -574,8 +609,9 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
     if not enrollment:
         raise HTTPException(status_code=403, detail="You are not enrolled in this course")
 
-    now = datetime.now()
-    if assignment.start_time and now < assignment.start_time:
+    now = get_now()
+    start = normalize_datetime(assignment.start_time)
+    if start and now < start:
         raise HTTPException(status_code=400, detail="This assessment is not open yet")
     
     deadline = _assessment_deadline(assignment)

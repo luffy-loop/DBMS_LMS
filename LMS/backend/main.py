@@ -1,11 +1,13 @@
-from datetime import datetime, timedelta
+import time
+import logging
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pypdf import PdfReader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
@@ -22,8 +24,29 @@ from teacher_insights import router as teacher_insights_router
 from analytics import router as analytics_router
 from exam_evaluation import router as exam_router, evaluate_and_record_exam
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("lms.api")
+
 with engine.begin() as conn:
     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_courses_teacher_id ON courses(teacher_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assignments_course_id ON assignments(course_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assignments_teacher_id ON assignments(teacher_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_submissions_assignment_id ON submissions(assignment_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_submissions_student_id ON submissions(student_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_enrollments_student_course ON enrollments(student_id, course_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_questions_assignment ON assessment_questions(assignment_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_options_question ON assessment_question_options(question_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_rubrics_question ON assessment_question_rubrics(question_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sqa_submission ON student_question_answers(submission_id);"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sqa_student ON student_question_answers(student_id);"))
+
+try:
+    mongo_db.resources.create_index("assignment_id")
+    mongo_db.resources.create_index("course_id")
+    mongo_db.submission_files.create_index("submission_id")
+except Exception:
+    pass
 
 Base.metadata.create_all(bind=engine)
 
@@ -41,6 +64,17 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL"))
 
 app = FastAPI(title="LMS")
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = f"{process_time * 1000:.2f}ms"
+    if process_time > 0.15:
+        logger.info(f"Slow request: {request.method} {request.url.path} took {process_time*1000:.2f}ms")
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -68,6 +102,7 @@ def health():
 
 @app.post("/register")
 def register(data: Register, db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
     user = db.query(User).filter(User.email == data.roll_no).first()
     if user:
         raise HTTPException(status_code=400, detail="Roll number already registered")
@@ -78,18 +113,24 @@ def register(data: Register, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[AUTH] Register for user={user.id} ({user.role}) took {dur:.2f}ms")
     return {"message": "User registered successfully", "id": user.id, "role": user.role}
 
 @app.post("/login")
 def login(data: Login, db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
     user = db.query(User).filter(User.email == data.roll_no).first()
     if not user or not pwd.verify(data.password, user.password):
         raise HTTPException(status_code=401, detail="Invalid roll number or password")
     token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[AUTH] Login for user={user.id} ({user.role}) took {dur:.2f}ms")
     return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
 
 @app.get("/profile")
 def profile(user=Depends(get_user), db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
     account = db.query(User).filter(User.id == user["id"]).first()
     if not account:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -103,13 +144,20 @@ def profile(user=Depends(get_user), db: Session = Depends(get_db)):
     else:
         course_rows = db.query(Course).all()
         assignments = db.query(Assignment).all()
-    now = datetime.now()
+    
+    course_map = {c.id: c.title for c in course_rows}
+    missing_cids = [a.course_id for a in assignments if a.course_id not in course_map]
+    if missing_cids:
+        for cid, ctitle in db.query(Course.id, Course.title).filter(Course.id.in_(missing_cids)).all():
+            course_map[cid] = ctitle
+
+    now = get_now()
     upcoming = []
     for a in assignments:
         deadline = assessment_deadline(a)
         if deadline and deadline > now:
-            course = db.query(Course).filter(Course.id == a.course_id).first()
-            upcoming.append({"id": a.id, "title": a.title, "type": a.type, "course": course.title if course else "Course", "start_time": a.start_time, "deadline": deadline})
+            c_title = course_map.get(a.course_id, "Course")
+            upcoming.append({"id": a.id, "title": a.title, "type": a.type, "course": c_title, "start_time": format_iso(a.start_time), "deadline": format_iso(deadline)})
     upcoming.sort(key=lambda x: x["deadline"])
     return {"id": account.id, "name": account.name, "email": account.email, "role": account.role, "section": account.section or "Unassigned", "courses": [{"id": c.id, "title": c.title, "description": c.description} for c in course_rows], "upcoming": upcoming[:6]}
 
@@ -129,11 +177,17 @@ def teacher(user=Depends(get_user)):
 def teacher_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    courses = db.query(Course).filter(Course.teacher_id == user["id"]).all()
-    course_ids = [c.id for c in courses]
-    assessments = db.query(Assignment).filter(Assignment.teacher_id == user["id"]).count()
-    submissions = db.query(Submission).filter(Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
-    pending = db.query(Submission).filter(Submission.marks == None, Submission.assignment_id.in_(db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]))).count()
+    courses = db.query(Course.id).filter(Course.teacher_id == user["id"]).all()
+    course_ids = [c[0] for c in courses]
+    asgn_rows = db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]).all()
+    asgn_ids = [a[0] for a in asgn_rows]
+    assessments = len(asgn_ids)
+    if asgn_ids:
+        submissions = db.query(Submission.id).filter(Submission.assignment_id.in_(asgn_ids)).count()
+        pending = db.query(Submission.id).filter(Submission.marks == None, Submission.assignment_id.in_(asgn_ids)).count()
+    else:
+        submissions = 0
+        pending = 0
     try:
         pdfs = mongo_db.resources.count_documents({"teacher_id": user["id"], "assignment_id": {"$exists": False}})
     except Exception:
@@ -177,10 +231,18 @@ def enroll(data: EnrollmentCreate, user=Depends(get_user), db: Session = Depends
 
 @app.get("/my-courses")
 def my_courses(user=Depends(get_user), db: Session = Depends(get_db)):
-    if user["role"] != "student":
-        raise HTTPException(status_code=403, detail="Student access only")
-    enrollments = db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()
-    return [course for e in enrollments if (course := db.query(Course).filter(Course.id == e.course_id).first())]
+    t0 = time.perf_counter()
+    if user["role"] == "student":
+        rows = db.query(Course).join(Enrollment, Enrollment.course_id == Course.id).filter(Enrollment.student_id == user["id"]).all()
+    elif user["role"] == "teacher":
+        rows = db.query(Course).filter(Course.teacher_id == user["id"]).all()
+    elif user["role"] == "admin":
+        rows = db.query(Course).all()
+    else:
+        raise HTTPException(status_code=403, detail="Access denied")
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[COURSES] my_courses for user={user['id']} ({user['role']}, count={len(rows)}) took {dur:.2f}ms")
+    return rows
 
 @app.post("/assignments")
 async def create_assignment(
@@ -228,8 +290,8 @@ async def create_assignment(
         course_id=course.id,
         teacher_id=user["id"],
         type=type,
-        start_time=start_time,
-        end_time=end_time,
+        start_time=normalize_datetime(start_time),
+        end_time=normalize_datetime(end_time),
         duration_minutes=duration_minutes
     )
     db.add(assignment)
@@ -256,32 +318,57 @@ async def create_assignment(
 
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
 
+def normalize_datetime(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+def get_now() -> datetime:
+    return datetime.now()
+
+get_utc_now = get_now
+
+def format_iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    norm = normalize_datetime(dt)
+    return norm.isoformat()
+
+format_iso_utc = format_iso
+
 def assessment_deadline(assignment):
     deadlines = []
-    if assignment.end_time:
-        deadlines.append(assignment.end_time)
-    if assignment.start_time and assignment.duration_minutes:
-        deadlines.append(assignment.start_time + timedelta(minutes=assignment.duration_minutes))
+    end = normalize_datetime(assignment.end_time)
+    start = normalize_datetime(assignment.start_time)
+    if end:
+        deadlines.append(end)
+    if start and assignment.duration_minutes:
+        deadlines.append(start + timedelta(minutes=assignment.duration_minutes))
     return min(deadlines) if deadlines else None
 
 def assessment_status(assignment):
-    now = datetime.now()
-    if assignment.start_time and now < assignment.start_time:
+    now = get_now()
+    start = normalize_datetime(assignment.start_time)
+    if start and now < start:
         return "upcoming"
     deadline = assessment_deadline(assignment)
     if deadline and now >= deadline:
         return "closed"
     return "open"
 
-def db_submission_exists(assignment_id, student_id):
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
+def db_submission_exists(assignment_id, student_id, db: Session | None = None):
+    if db is not None:
         return db.query(Submission.id).filter(Submission.assignment_id == assignment_id, Submission.student_id == student_id).first() is not None
+    from database import SessionLocal
+    db_local = SessionLocal()
+    try:
+        return db_local.query(Submission.id).filter(Submission.assignment_id == assignment_id, Submission.student_id == student_id).first() is not None
     finally:
-        db.close()
+        db_local.close()
 
-def assessment_payload(assignment, student_id=None):
+def assessment_payload(assignment, student_id=None, db: Session | None = None):
     handout = None
     try:
         handout = mongo_db.resources.find_one(
@@ -297,12 +384,12 @@ def assessment_payload(assignment, student_id=None):
         "course_id": assignment.course_id,
         "teacher_id": assignment.teacher_id,
         "type": assignment.type,
-        "start_time": assignment.start_time,
-        "end_time": assignment.end_time,
+        "start_time": format_iso(assignment.start_time),
+        "end_time": format_iso(assignment.end_time),
         "duration_minutes": assignment.duration_minutes,
-        "deadline": assessment_deadline(assignment),
+        "deadline": format_iso(assessment_deadline(assignment)),
         "status": assessment_status(assignment),
-        "submitted": bool(student_id and db_submission_exists(assignment.id, student_id)),
+        "submitted": bool(student_id and db_submission_exists(assignment.id, student_id, db)),
         "handout": {
             "id": str(handout["_id"]),
             "title": handout.get("title", ""),
@@ -310,17 +397,133 @@ def assessment_payload(assignment, student_id=None):
         } if handout else None
     }
 
+@app.get("/my-assignments")
+def my_assignments(user=Depends(get_user), db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
+    if user["role"] == "student":
+        enrollments = db.query(Enrollment.course_id).filter(Enrollment.student_id == user["id"]).all()
+        cids = [e[0] for e in enrollments]
+    elif user["role"] == "teacher":
+        courses = db.query(Course.id).filter(Course.teacher_id == user["id"]).all()
+        cids = [c[0] for c in courses]
+    elif user["role"] == "admin":
+        courses = db.query(Course.id).all()
+        cids = [c[0] for c in courses]
+    else:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not cids:
+        return []
+
+    assignments = db.query(Assignment).filter(Assignment.course_id.in_(cids)).all()
+    if not assignments:
+        return []
+
+    asgn_ids = [a.id for a in assignments]
+    submitted_ids = set()
+    if user["role"] == "student":
+        subs = db.query(Submission.assignment_id).filter(
+            Submission.assignment_id.in_(asgn_ids),
+            Submission.student_id == user["id"]
+        ).all()
+        submitted_ids = {s[0] for s in subs}
+
+    handouts_map = {}
+    try:
+        handouts = mongo_db.resources.find(
+            {"assignment_id": {"$in": asgn_ids}},
+            {"_id": 1, "assignment_id": 1, "title": 1, "filename": 1}
+        )
+        for h in handouts:
+            asgn_id = h.get("assignment_id")
+            if asgn_id:
+                handouts_map[asgn_id] = {
+                    "id": str(h["_id"]),
+                    "title": h.get("title", ""),
+                    "filename": h.get("filename", "")
+                }
+    except Exception:
+        handouts_map = {}
+
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[ASSIGNMENTS] my_assignments for user={user['id']} ({user['role']}, count={len(assignments)}) took {dur:.2f}ms")
+
+    return [{
+        "id": a.id,
+        "title": a.title,
+        "description": a.description,
+        "course_id": a.course_id,
+        "teacher_id": a.teacher_id,
+        "type": a.type,
+        "start_time": format_iso(a.start_time),
+        "end_time": format_iso(a.end_time),
+        "duration_minutes": a.duration_minutes,
+        "deadline": format_iso(assessment_deadline(a)),
+        "status": assessment_status(a),
+        "submitted": a.id in submitted_ids,
+        "handout": handouts_map.get(a.id)
+    } for a in assignments]
+
 @app.get("/assignments/{course_id}")
 def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     if user["role"] == "student":
-        if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+        if not db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
             raise HTTPException(status_code=403, detail="You are not enrolled in this course")
     elif user["role"] == "teacher":
-        if not db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
+        if not db.query(Course.id).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
             raise HTTPException(status_code=403, detail="You can only access your own course")
-    return [assessment_payload(a, user["id"] if user["role"] == "student" else None) for a in db.query(Assignment).filter(Assignment.course_id == course_id).all()]
+    
+    assignments = db.query(Assignment).filter(Assignment.course_id == course_id).all()
+    if not assignments:
+        return []
+
+    asgn_ids = [a.id for a in assignments]
+    submitted_ids = set()
+    if user["role"] == "student":
+        subs = db.query(Submission.assignment_id).filter(
+            Submission.assignment_id.in_(asgn_ids),
+            Submission.student_id == user["id"]
+        ).all()
+        submitted_ids = {s[0] for s in subs}
+
+    handouts_map = {}
+    try:
+        handouts = mongo_db.resources.find(
+            {"assignment_id": {"$in": asgn_ids}},
+            {"_id": 1, "assignment_id": 1, "title": 1, "filename": 1}
+        )
+        for h in handouts:
+            asgn_id = h.get("assignment_id")
+            if asgn_id:
+                handouts_map[asgn_id] = {
+                    "id": str(h["_id"]),
+                    "title": h.get("title", ""),
+                    "filename": h.get("filename", "")
+                }
+    except Exception:
+        handouts_map = {}
+
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[ASSIGNMENTS] List for course={course_id} user={user['id']} (count={len(assignments)}) took {dur:.2f}ms")
+
+    return [{
+        "id": a.id,
+        "title": a.title,
+        "description": a.description,
+        "course_id": a.course_id,
+        "teacher_id": a.teacher_id,
+        "type": a.type,
+        "start_time": format_iso(a.start_time),
+        "end_time": format_iso(a.end_time),
+        "duration_minutes": a.duration_minutes,
+        "deadline": format_iso(assessment_deadline(a)),
+        "status": assessment_status(a),
+        "submitted": a.id in submitted_ids,
+        "handout": handouts_map.get(a.id)
+    } for a in assignments]
 
 @app.post("/submissions")
 async def submit_assignment(
@@ -337,8 +540,9 @@ async def submit_assignment(
     if not assignment:
         raise HTTPException(status_code=404, detail="Assessment not found")
 
-    now = datetime.now()
-    if assignment.start_time and now < assignment.start_time:
+    now = get_now()
+    start = normalize_datetime(assignment.start_time)
+    if start and now < start:
         raise HTTPException(status_code=400, detail="This assessment is not open yet")
     deadline = assessment_deadline(assignment)
     if deadline and now >= deadline:
@@ -457,21 +661,76 @@ def submission_payload(submission, db: Session | None = None):
         "file_name": file_doc.get("filename", "") if file_doc else None
     }
 
+def build_submission_payloads(submissions: list[Submission], db: Session) -> list[dict]:
+    if not submissions:
+        return []
+
+    sub_ids = [s.id for s in submissions]
+    asgn_ids = list({s.assignment_id for s in submissions})
+    student_ids = list({s.student_id for s in submissions})
+
+    assignments = {a[0]: a[1] for a in db.query(Assignment.id, Assignment.title).filter(Assignment.id.in_(asgn_ids)).all()}
+    students = {u[0]: u[1] for u in db.query(User.id, User.name).filter(User.id.in_(student_ids)).all()}
+
+    from models import StudentQuestionAnswer
+    sqa_sums = dict(
+        db.query(StudentQuestionAnswer.submission_id, func.sum(StudentQuestionAnswer.max_marks))
+        .filter(StudentQuestionAnswer.submission_id.in_(sub_ids))
+        .group_by(StudentQuestionAnswer.submission_id)
+        .all()
+    )
+
+    files_map = {}
+    try:
+        file_docs = mongo_db.submission_files.find(
+            {"submission_id": {"$in": sub_ids}},
+            {"_id": 1, "submission_id": 1, "filename": 1}
+        )
+        for f in file_docs:
+            files_map[f["submission_id"]] = f
+    except Exception:
+        files_map = {}
+
+    results = []
+    for s in submissions:
+        f_doc = files_map.get(s.id)
+        max_m = sqa_sums.get(s.id)
+        if max_m is not None:
+            max_m = int(max_m)
+        results.append({
+            "id": s.id,
+            "assignment_id": s.assignment_id,
+            "assignment_title": assignments.get(s.assignment_id),
+            "student_id": s.student_id,
+            "student_name": students.get(s.student_id),
+            "answer": s.answer,
+            "marks": s.marks,
+            "max_marks": max_m,
+            "file_id": str(f_doc["_id"]) if f_doc else None,
+            "file_name": f_doc.get("filename", "") if f_doc else None
+        })
+    return results
+
 @app.get("/my-submissions")
 def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
-    return [submission_payload(s, db) for s in db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()]
+    subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
+    return build_submission_payloads(subs, db)
 
 @app.get("/teacher/submissions")
 def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    ids = db.query(Assignment.id).filter(Assignment.teacher_id == user["id"])
-    query = db.query(Submission).filter(Submission.assignment_id.in_(ids))
+    asgn_rows = db.query(Assignment.id).filter(Assignment.teacher_id == user["id"]).all()
+    asgn_ids = [a[0] for a in asgn_rows]
+    if not asgn_ids:
+        return []
+    query = db.query(Submission).filter(Submission.assignment_id.in_(asgn_ids))
     if pending_only:
         query = query.filter(Submission.marks == None)
-    return [submission_payload(s, db) for s in query.order_by(Submission.id.desc()).all()]
+    subs = query.order_by(Submission.id.desc()).all()
+    return build_submission_payloads(subs, db)
 
 @app.put("/submissions/{submission_id}/marks")
 def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -493,7 +752,8 @@ def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Sessi
 def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
-    return [submission_payload(s, db) for s in db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()]
+    subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
+    return build_submission_payloads(subs, db)
 
 @app.post("/courses/{course_id}/resources")
 async def add_resource(course_id: int, file: UploadFile = File(...), title: str = Form(...), user=Depends(get_user), db: Session = Depends(get_db)):
@@ -517,15 +777,51 @@ async def add_resource(course_id: int, file: UploadFile = File(...), title: str 
     result = mongo_db.resources.insert_one({"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": content, "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()})
     return {"message": "PDF uploaded", "id": str(result.inserted_id), "title": title}
 
+@app.get("/my-course-resources")
+def my_course_resources(user=Depends(get_user), db: Session = Depends(get_db)):
+    t0 = time.perf_counter()
+    if user["role"] == "student":
+        enrollments = db.query(Enrollment.course_id).filter(Enrollment.student_id == user["id"]).all()
+        cids = [e[0] for e in enrollments]
+    elif user["role"] == "teacher":
+        courses = db.query(Course.id).filter(Course.teacher_id == user["id"]).all()
+        cids = [c[0] for c in courses]
+    elif user["role"] == "admin":
+        courses = db.query(Course.id).all()
+        cids = [c[0] for c in courses]
+    else:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not cids:
+        return {}
+
+    resources = mongo_db.resources.find(
+        {"course_id": {"$in": cids}, "assignment_id": {"$exists": False}},
+        {"_id": 1, "course_id": 1, "title": 1, "filename": 1, "created_at": 1}
+    )
+    res_map = {}
+    for r in resources:
+        cid = r.get("course_id")
+        if cid:
+            res_map.setdefault(cid, []).append({
+                "id": str(r["_id"]),
+                "title": r.get("title", ""),
+                "filename": r.get("filename", ""),
+                "created_at": r.get("created_at")
+            })
+    dur = (time.perf_counter() - t0) * 1000
+    logger.info(f"[RESOURCES] my_course_resources for user={user['id']} ({len(cids)} courses) took {dur:.2f}ms")
+    return res_map
+
 @app.get("/courses/{course_id}/resources")
 def get_resources(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     if user["role"] == "student":
-        if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+        if not db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
             raise HTTPException(status_code=403, detail="You are not enrolled in this course")
     elif user["role"] == "teacher":
-        if not db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
+        if not db.query(Course.id).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
             raise HTTPException(status_code=403, detail="You can only access your own course")
     resources = mongo_db.resources.find(
         {"course_id": course_id, "assignment_id": {"$exists": False}},
@@ -534,7 +830,7 @@ def get_resources(course_id: int, user=Depends(get_user), db: Session = Depends(
     return [{"id": str(r["_id"]), "title": r.get("title", ""), "filename": r.get("filename", ""), "created_at": r.get("created_at")} for r in resources]
 
 @app.get("/resources/{resource_id}/download")
-def download_resource(resource_id: str, user=Depends(get_user)):
+def download_resource(resource_id: str, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     try:
@@ -545,13 +841,8 @@ def download_resource(resource_id: str, user=Depends(get_user)):
         raise HTTPException(status_code=404, detail="Resource not found")
     course_id = resource.get("course_id")
     if user["role"] == "student":
-        from database import SessionLocal
-        db = SessionLocal()
-        try:
-            if not db.query(Enrollment).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
-                raise HTTPException(status_code=403, detail="You are not enrolled in this course")
-        finally:
-            db.close()
+        if not db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
     elif user["role"] == "teacher" and resource.get("teacher_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
     return StreamingResponse(iter([resource["file"]]), media_type=resource.get("content_type", "application/pdf"), headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "resource.pdf")}"'})
@@ -566,7 +857,7 @@ def download_submission(submission_id: int, user=Depends(get_user), db: Session 
         if submission.student_id != user["id"]:
             raise HTTPException(status_code=403, detail="Access denied")
     elif user["role"] == "teacher":
-        assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id, Assignment.teacher_id == user["id"]).first()
+        assignment = db.query(Assignment.id).filter(Assignment.id == submission.assignment_id, Assignment.teacher_id == user["id"]).first()
         if not assignment:
             raise HTTPException(status_code=403, detail="Access denied")
     elif user["role"] != "admin":
@@ -581,7 +872,8 @@ def download_submission(submission_id: int, user=Depends(get_user), db: Session 
 def admin_users(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access only")
-    return [{"id": u.id, "name": u.name, "roll_no": u.email, "role": u.role, "section": u.section or "Unassigned"} for u in db.query(User).order_by(User.role, User.name).all()]
+    rows = db.query(User.id, User.name, User.email, User.role, User.section).order_by(User.role, User.name).all()
+    return [{"id": u[0], "name": u[1], "roll_no": u[2], "role": u[3], "section": u[4] or "Unassigned"} for u in rows]
 
 @app.put("/admin/teachers/{teacher_id}/section")
 def assign_teacher_section(teacher_id: int, section: str, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -601,7 +893,23 @@ def assign_teacher_section(teacher_id: int, section: str, user=Depends(get_user)
 def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access only")
-    return {"users": db.query(User).count(), "students": db.query(User).filter(User.role == "student").count(), "teachers": db.query(User).filter(User.role == "teacher").count(), "admins": db.query(User).filter(User.role == "admin").count(), "courses": db.query(Course).count(), "assignments": db.query(Assignment).count(), "submissions": db.query(Submission).count()}
+    role_counts = dict(db.query(User.role, func.count(User.id)).group_by(User.role).all())
+    total_users = sum(role_counts.values())
+    students_count = role_counts.get("student", 0)
+    teachers_count = role_counts.get("teacher", 0)
+    admins_count = role_counts.get("admin", 0)
+    courses_count = db.query(Course.id).count()
+    assignments_count = db.query(Assignment.id).count()
+    submissions_count = db.query(Submission.id).count()
+    return {
+        "users": total_users,
+        "students": students_count,
+        "teachers": teachers_count,
+        "admins": admins_count,
+        "courses": courses_count,
+        "assignments": assignments_count,
+        "submissions": submissions_count
+    }
 
 @app.get("/ai-search")
 def ai_search(q: str, user=Depends(get_user), db: Session = Depends(get_db)):

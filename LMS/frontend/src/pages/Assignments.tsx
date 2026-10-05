@@ -90,6 +90,10 @@ export default function Assignments() {
   const [examAnswers, setExamAnswers] = useState<Record<number, { selected_option_id?: number; student_answer?: string }>>({})
   const [evalResult, setEvalResult] = useState<SubmissionResult | null>(null)
   const [submittingExam, setSubmittingExam] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  const [loadingQuestions, setLoadingQuestions] = useState(false)
+  const [nowTime, setNowTime] = useState(Date.now())
 
   useEffect(() => {
     const t = localStorage.getItem("token")
@@ -100,22 +104,28 @@ export default function Assignments() {
   }, [navigate])
 
   useEffect(() => {
-    const id = window.setInterval(() => setItems(v => [...v]), 1000)
+    const id = window.setInterval(() => setNowTime(Date.now()), 10000)
     return () => window.clearInterval(id)
   }, [])
 
   async function load(t: string, r: string) {
     try {
-      const all = await fetch(API + "/courses").then(x => x.json())
-      const cs = r === "teacher"
-        ? all.filter((c: Course) => c.teacher_id === Number(localStorage.getItem("userId")))
-        : await fetch(API + "/my-courses", { headers: { Authorization: "Bearer " + t } }).then(x => x.json())
+      const [coursesRes, assignmentsRes] = await Promise.all([
+        fetch(API + (r === "teacher" ? "/my-courses" : "/my-courses"), { headers: { Authorization: "Bearer " + t } }),
+        fetch(API + "/my-assignments", { headers: { Authorization: "Bearer " + t } })
+      ])
+      const cs = coursesRes.ok ? await coursesRes.json() : []
       setCourses(cs)
-      if (cs[0]) setCourseId(String(cs[0].id))
-      const d = await Promise.all(
-        cs.map((c: Course) => fetch(API + "/assignments/" + c.id, { headers: { Authorization: "Bearer " + t } }).then(x => x.ok ? x.json() : []))
-      )
-      setItems(d.flat())
+      setCourseId(prev => (prev && cs.some((c: Course) => String(c.id) === prev) ? prev : (cs[0] ? String(cs[0].id) : "")))
+      
+      if (assignmentsRes.ok) {
+        setItems(await assignmentsRes.json())
+      } else {
+        const d = await Promise.all(
+          cs.map((c: Course) => fetch(API + "/assignments/" + c.id, { headers: { Authorization: "Bearer " + t } }).then(x => x.ok ? x.json() : []))
+        )
+        setItems(d.flat())
+      }
     } catch {
       setError("Failed to load assessments")
     }
@@ -123,10 +133,12 @@ export default function Assignments() {
 
   async function create(e: React.FormEvent) {
     e.preventDefault()
+    if (creating) return
     const t = localStorage.getItem("token")
     if (!t) return
     if ((start && !end) || (!start && end)) { setError("Set both start and end time"); return }
     if (duration && !start) { setError("Start time is required for a duration"); return }
+    setCreating(true)
     try {
       setError("")
       const b = new FormData()
@@ -143,9 +155,11 @@ export default function Assignments() {
       if (!r.ok) throw new Error(d.detail || "Creation failed")
       setMessage("Assessment created successfully")
       setShow(false); setTitle(""); setDescription(""); setStart(""); setEnd(""); setDuration(""); setHandout(null)
-      load(t, "teacher")
+      await load(t, "teacher")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Creation failed")
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -206,7 +220,7 @@ export default function Assignments() {
   // Teacher adds question
   async function addQuestion(e: React.FormEvent) {
     e.preventDefault()
-    if (!managingAsgn) return
+    if (!managingAsgn || qLoading) return
     const t = localStorage.getItem("token")
     if (!t) return
 
@@ -263,7 +277,8 @@ export default function Assignments() {
       setRubricCriteria([])
       setMcqOptions(["", "", "", ""])
       setMcqCorrectIndex(0)
-      openQuestionManager(managingAsgn)
+      await openQuestionManager(managingAsgn)
+      await load(t, role)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add question")
     } finally {
@@ -304,6 +319,7 @@ export default function Assignments() {
     setSubmissionFile(null)
     const t = localStorage.getItem("token")
     if (!t) return
+    setLoadingQuestions(true)
     try {
       const res = await fetch(API + `/assignments/${asgnId}/questions`, { headers: { Authorization: "Bearer " + t } })
       if (res.ok) {
@@ -319,6 +335,8 @@ export default function Assignments() {
       }
     } catch {
       setExamQuestions([])
+    } finally {
+      setLoadingQuestions(false)
     }
   }
 
@@ -354,7 +372,7 @@ export default function Assignments() {
   // Student submits standard assignment or auto-evaluated exam
   async function submitExam(asgnId: number) {
     const t = localStorage.getItem("token")
-    if (!t) return
+    if (!t || submittingExam) return
     setSubmittingExam(true)
     setError("")
     try {
@@ -376,7 +394,7 @@ export default function Assignments() {
 
         setEvalResult(data)
         setMessage("Exam submitted & automatically evaluated successfully!")
-        load(t, "student")
+        await load(t, "student")
       } else {
         // Standard legacy assignment submission
         if (!answer.trim() && !submissionFile) { setError("Write an answer or upload a PDF"); return }
@@ -391,7 +409,7 @@ export default function Assignments() {
         setSelected(null)
         setAnswer("")
         setSubmissionFile(null)
-        load(t, "student")
+        await load(t, "student")
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Submission failed")
@@ -421,7 +439,7 @@ export default function Assignments() {
 
   function remaining(v: string | null) {
     if (!v) return ""
-    const ms = new Date(v).getTime() - Date.now()
+    const ms = new Date(v).getTime() - nowTime
     if (ms <= 0) return "Time expired"
     const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60
     return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`
@@ -502,8 +520,8 @@ export default function Assignments() {
                     <span className="lms-upload-name">{handout?.name || "No PDF selected"}</span>
                   </label>
                 </Field>
-                <button disabled={!courseId} className="w-full rounded-xl bg-white py-3 text-sm font-medium text-black">
-                  {handout ? <><Upload size={15} className="mr-2 inline" />Create & Upload</> : "Create Assessment"}
+                <button disabled={!courseId || creating} className="w-full rounded-xl bg-white py-3 text-sm font-medium text-black disabled:opacity-50">
+                  {creating ? "Creating..." : handout ? <><Upload size={15} className="mr-2 inline" />Create & Upload</> : "Create Assessment"}
                 </button>
               </form>
             </div>
@@ -519,7 +537,7 @@ export default function Assignments() {
                     <h3 className="mt-1 text-xl font-semibold">{managingAsgn.title}</h3>
                     <p className="text-xs text-white/40">Add MCQs (relational evaluation) or Descriptive questions (pgvector semantic evaluation).</p>
                   </div>
-                  <button onClick={() => setManagingAsgn(null)} className="rounded-lg p-1 text-white/50 hover:bg-white/10 hover:text-white"><X size={20} /></button>
+                  <button onClick={() => { setManagingAsgn(null); const t = localStorage.getItem("token"); if (t) load(t, role); }} className="rounded-lg p-1 text-white/50 hover:bg-white/10 hover:text-white"><X size={20} /></button>
                 </div>
 
                 {/* Existing Questions List */}
@@ -746,7 +764,7 @@ export default function Assignments() {
                     <div className="flex justify-end gap-3 pt-2">
                       <button
                         type="button"
-                        onClick={() => setManagingAsgn(null)}
+                        onClick={() => { setManagingAsgn(null); const t = localStorage.getItem("token"); if (t) load(t, role); }}
                         className="rounded-xl border border-white/10 px-5 py-2.5 text-xs text-white/60 hover:bg-white/5"
                       >
                         Done
@@ -767,7 +785,17 @@ export default function Assignments() {
 
           {/* Assessment List */}
           <div className="mt-8 space-y-4">
-            {items.map(a => (
+            {items.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-10 text-center">
+                <ClipboardList className="mx-auto mb-4 text-white/30" size={34} />
+                <p className="text-white/60">
+                  {role === "teacher"
+                    ? "No assessments created yet. Click 'Create Assessment' above to get started."
+                    : "No assessments assigned to your enrolled courses yet."}
+                </p>
+              </div>
+            ) : (
+              items.map(a => (
               <div key={a.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6">
                 <div className="flex flex-col gap-4 md:flex-row md:justify-between">
                   <div className="min-w-0">
@@ -862,7 +890,12 @@ export default function Assignments() {
 
                     {/* Interactive Exam Questions (Student View) */}
                     {!a.submitted && a.status === "open" && !evalResult && (
-                    examQuestions.length > 0 ? (
+                    loadingQuestions ? (
+                      <div className="py-8 text-center text-xs text-white/40">
+                        <div className="mx-auto mb-2 h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                        Loading assessment questions...
+                      </div>
+                    ) : examQuestions.length > 0 ? (
                       <div className="space-y-6">
                         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/50">
                           This test contains {examQuestions.length} auto-evaluated question(s). Answer each question below and click submit.
@@ -958,7 +991,7 @@ export default function Assignments() {
                   </div>
                 )}
               </div>
-            ))}
+            )))}
           </div>
         </section>
       </main>

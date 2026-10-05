@@ -7,7 +7,34 @@ export default function Courses(){
  const navigate=useNavigate(),[courses,setCourses]=useState<Course[]>([]),[mine,setMine]=useState<Course[]>([]),[res,setRes]=useState<Record<number,Resource[]>>({}),[error,setError]=useState("")
 const role=localStorage.getItem("role")||"student"
  useEffect(()=>{const t=localStorage.getItem("token");if(!t){navigate("/login");return}load(t)},[navigate])
- async function load(t:string){try{const all=await fetch(API+"/courses").then(r=>r.json());setCourses(all);const m=role==="student"?await fetch(API+"/my-courses",{headers:{Authorization:"Bearer "+t}}).then(r=>r.json()):all.filter((c:Course)=>c.teacher_id===Number(localStorage.getItem("userId")));setMine(m);const pairs=await Promise.all(m.map(async(c:Course)=>[c.id,await fetch(API+"/courses/"+c.id+"/resources",{headers:{Authorization:"Bearer "+t}}).then(r=>r.ok?r.json():[])] as const));setRes(Object.fromEntries(pairs))}catch{setError("Failed to load courses")}}
+  async function load(t: string) {
+    try {
+      const [allRes, mineRes, resRes] = await Promise.all([
+        fetch(API + "/courses", { headers: { Authorization: "Bearer " + t } }),
+        role === "student" ? fetch(API + "/my-courses", { headers: { Authorization: "Bearer " + t } }) : Promise.resolve(null),
+        fetch(API + "/my-course-resources", { headers: { Authorization: "Bearer " + t } })
+      ])
+      const all = allRes.ok ? await allRes.json() : []
+      setCourses(all)
+      const m = role === "student"
+        ? (mineRes && mineRes.ok ? await mineRes.json() : [])
+        : all.filter((c: Course) => c.teacher_id === Number(localStorage.getItem("userId")))
+      setMine(m)
+      if (resRes && resRes.ok) {
+        setRes(await resRes.json())
+      } else if (m.length > 0) {
+        const pairs = await Promise.all(
+          m.map(async (c: Course) => [
+            c.id,
+            await fetch(API + "/courses/" + c.id + "/resources", { headers: { Authorization: "Bearer " + t } }).then(r => r.ok ? r.json() : [])
+          ] as const)
+        )
+        setRes(Object.fromEntries(pairs))
+      }
+    } catch {
+      setError("Failed to load courses")
+    }
+  }
  async function enroll(id:number){const t=localStorage.getItem("token");if(!t)return;const r=await fetch(API+"/enroll",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+t},body:JSON.stringify({course_id:id})});if(r.ok)load(t)}
  async function openPdf(id:string){const t=localStorage.getItem("token");if(!t)return navigate("/login");try{const r=await fetch(API+"/resources/"+id+"/download",{headers:{Authorization:"Bearer "+t}});if(!r.ok)throw new Error("Unable to open PDF");const blob=await r.blob();const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener,noreferrer");setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(e){setError(e instanceof Error?e.message:"Unable to open PDF")}}
  function logout(){localStorage.clear();navigate("/login")}

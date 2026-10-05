@@ -35,6 +35,7 @@ export default function Login() {
         throw new Error(data.detail || "Login failed")
       }
 
+      localStorage.clear()
       localStorage.setItem("token", data.token)
       localStorage.setItem("role", data.role)
       localStorage.setItem("name", data.name)

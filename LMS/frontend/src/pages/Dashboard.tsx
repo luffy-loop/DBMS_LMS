@@ -70,15 +70,13 @@ export default function Dashboard() {
   }, [navigate])
 
   async function loadStudentData(token: string) {
+    const headers = {
+      Authorization: `Bearer ${token}`
+    }
     try {
-      const headers = {
-        Authorization: `Bearer ${token}`
-      }
-
-      const [coursesRes, submissionsRes, insightsRes] = await Promise.all([
+      const [coursesRes, submissionsRes] = await Promise.all([
         fetch(`${API}/my-courses`, { headers }),
-        fetch(`${API}/my-submissions`, { headers }),
-        fetch(`${API}/learning-insights`, { headers })
+        fetch(`${API}/my-submissions`, { headers })
       ])
 
       if (coursesRes.ok) {
@@ -90,14 +88,21 @@ export default function Dashboard() {
         const submissionsData = await submissionsRes.json()
         setSubmissions(submissionsData)
       }
-      if (insightsRes.ok) {
-        const insightsData = await insightsRes.json()
-        setInsights(insightsData)
-      }
     } catch (error) {
       console.error(error)
     } finally {
       setLoading(false)
+    }
+
+    // Secondary / non-blocking lazy load for learning insights
+    try {
+      const insightsRes = await fetch(`${API}/learning-insights`, { headers })
+      if (insightsRes.ok) {
+        const insightsData = await insightsRes.json()
+        setInsights(insightsData)
+      }
+    } catch (err) {
+      console.error("Non-critical learning insights fetch error:", err)
     }
   }
 
@@ -440,7 +445,7 @@ export default function Dashboard() {
         </section>
 
       </main>
-
+      <MobileNav role={role} active="dashboard" />
     </div>
   )
 }
@@ -450,9 +455,7 @@ function InsightMetric({label,value,detail}:{label:string;value:string;detail:st
     <p className="text-xs uppercase tracking-wider text-white/30">{label}</p>
     <p className="mt-2 text-xl font-semibold">{value}</p>
     <p className="mt-1 text-xs text-white/35">{detail}</p>
-  
-    <MobileNav role={"student"} active="dashboard" />
-</div>
+  </div>
 }
 
 function StatCard({

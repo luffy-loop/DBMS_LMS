@@ -1,9 +1,10 @@
 import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from auth import get_user
 from vector_store import search_resources
-from database import SessionLocal
+from database import get_db
 from models import Enrollment
 from study_knowledge import find_knowledge
 
@@ -15,12 +16,8 @@ class CopilotRequest(BaseModel):
 class NotesRequest(BaseModel):
     topic: str
 
-def _course_ids(user_id):
-    db = SessionLocal()
-    try:
-        return [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user_id).all()]
-    finally:
-        db.close()
+def _course_ids(user_id, db: Session):
+    return [e[0] for e in db.query(Enrollment.course_id).filter(Enrollment.student_id == user_id).all()]
 
 def _sentence_parts(text):
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if len(s.split()) >= 6]
@@ -56,21 +53,21 @@ def build_answer(question, results):
     return {"answer": answer, "confidence": "high" if len(useful) >= 2 else "medium", "mode": "course materials", "sources": [{"title": r["title"], "type": r["type"], "course_id": r["course_id"], "distance": r["distance"]} for r in useful[:4]]}
 
 @router.post("/study-copilot")
-def study_copilot(data: CopilotRequest, user=Depends(get_user)):
+def study_copilot(data: CopilotRequest, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     question = data.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     try:
-        course_ids = _course_ids(user["id"]) if user["role"] == "student" else None
+        course_ids = _course_ids(user["id"], db) if user["role"] == "student" else None
         results = search_resources(question, course_ids)
         return {"question": question, **build_answer(question, results)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Study Copilot unavailable: {exc}")
 
 @router.post("/study-notes")
-def study_notes(data: NotesRequest, user=Depends(get_user)):
+def study_notes(data: NotesRequest, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     topic = data.topic.strip()
@@ -80,7 +77,7 @@ def study_notes(data: NotesRequest, user=Depends(get_user)):
         knowledge = find_knowledge(topic)
         if knowledge:
             return {"topic": knowledge["topic"], "summary": knowledge["answer"], "bullets": knowledge["bullets"], "key_terms": knowledge["terms"], "exam_tip": knowledge["tip"], "mode": "study knowledge", "sources": [{"title": knowledge["topic"], "type": "core concept", "course_id": 0}]}
-        results = search_resources(topic, _course_ids(user["id"]) if user["role"] == "student" else None)
+        results = search_resources(topic, _course_ids(user["id"], db) if user["role"] == "student" else None)
         if not results:
             raise HTTPException(status_code=404, detail="No matching course material found for this topic")
         sentences = []

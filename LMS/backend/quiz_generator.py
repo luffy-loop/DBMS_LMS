@@ -1,19 +1,16 @@
 import random
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 from auth import get_user
 from vector_store import search_resources
-from database import SessionLocal
+from database import get_db
 from models import Enrollment
 from study_knowledge import KNOWLEDGE
 
 router = APIRouter()
 
-def _course_ids(user_id):
-    db = SessionLocal()
-    try:
-        return [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user_id).all()]
-    finally:
-        db.close()
+def _course_ids(user_id, db: Session):
+    return [e[0] for e in db.query(Enrollment.course_id).filter(Enrollment.student_id == user_id).all()]
 
 def _relevant_topics(results):
     text = " ".join(r.get("content", "") for r in results).lower()
@@ -32,11 +29,11 @@ def _make_questions(topics):
     return questions
 
 @router.get("/quiz/generate")
-def generate_quiz(user=Depends(get_user)):
+def generate_quiz(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
     try:
-        course_ids = _course_ids(user["id"]) if user["role"] == "student" else None
+        course_ids = _course_ids(user["id"], db) if user["role"] == "student" else None
         results = search_resources("key concepts definitions important topics", course_ids)
         topics = _relevant_topics(results)
         if len(topics) < 5:

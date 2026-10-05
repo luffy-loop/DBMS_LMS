@@ -40,7 +40,7 @@ def _resources(course_ids=None):
             })
 
         resource_query = {"course_id": {"$in": course_ids}} if course_ids is not None else {}
-        for resource in mongo_db.resources.find(resource_query):
+        for resource in mongo_db.resources.find(resource_query, {"_id": 1, "title": 1, "content": 1, "course_id": 1}):
             resources.append({
                 "id": f"resource-{resource['_id']}",
                 "title": resource.get("title", ""),

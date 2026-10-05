@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
@@ -6,6 +6,16 @@ from models import Course, Enrollment, Assignment, Submission
 from auth import get_user
 
 router = APIRouter()
+
+def normalize_datetime(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+def get_now() -> datetime:
+    return datetime.now()
 
 @router.get("/learning-insights")
 def learning_insights(user=Depends(get_user), db: Session = Depends(get_db)):
@@ -38,7 +48,7 @@ def learning_insights(user=Depends(get_user), db: Session = Depends(get_db)):
         pending_courses = [c for c in course_rows if c["submitted"] < c["assessments"]]
         if pending_courses:
             focus = min(pending_courses, key=lambda c: c["progress"])
-    now = datetime.now()
+    now = get_now()
     pending = []
     for assignment in assignments:
         if assignment.id in submission_map:
@@ -46,10 +56,12 @@ def learning_insights(user=Depends(get_user), db: Session = Depends(get_db)):
         course = courses.get(assignment.course_id)
         if not course:
             continue
-        if assignment.start_time and now < assignment.start_time:
-            detail = f"Opens {assignment.start_time.strftime('%d %b, %I:%M %p')}"
+        start = normalize_datetime(assignment.start_time)
+        end = normalize_datetime(assignment.end_time)
+        if start and now < start:
+            detail = f"Opens {start.strftime('%d %b, %I:%M %p')}"
             priority = "medium"
-        elif assignment.end_time and now >= assignment.end_time:
+        elif end and now >= end:
             continue
         else:
             detail = "Open now — complete it before the deadline."

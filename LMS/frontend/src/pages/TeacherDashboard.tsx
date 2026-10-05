@@ -8,9 +8,9 @@ export default function TeacherDashboard(){
  const navigate=useNavigate(),[courses,setCourses]=useState<Course[]>([]),[overview,setOverview]=useState<Overview|null>(null),[title,setTitle]=useState(""),[description,setDescription]=useState(""),[show,setShow]=useState(false),[mode,setMode]=useState<"course"|"resource">("course"),[resourceCourse,setResourceCourse]=useState(""),[resourceTitle,setResourceTitle]=useState(""),[file,setFile]=useState<File|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("")
  const name=localStorage.getItem("name")||"Teacher"
  useEffect(()=>{const t=localStorage.getItem("token");if(!t){navigate("/login");return}if(localStorage.getItem("role")!=="teacher"){navigate("/dashboard");return}load()},[navigate])
- async function load(){const t=localStorage.getItem("token");if(!t)return;try{const [coursesRes,overviewRes]=await Promise.all([fetch(API+"/courses",{headers:{Authorization:"Bearer "+t}}),fetch(API+"/teacher/overview",{headers:{Authorization:"Bearer "+t}})])
+ async function load(){const t=localStorage.getItem("token");if(!t)return;try{const [coursesRes,overviewRes]=await Promise.all([fetch(API+"/my-courses",{headers:{Authorization:"Bearer "+t}}),fetch(API+"/teacher/overview",{headers:{Authorization:"Bearer "+t}})])
   const errors:string[]=[]
-  if(coursesRes.ok){const d=await coursesRes.json();setCourses(d.filter((c:Course)=>c.teacher_id===Number(localStorage.getItem("userId"))))}else{const d=await coursesRes.json().catch(()=>({}));errors.push(d.detail||"Failed to load courses")}
+  if(coursesRes.ok){const d=await coursesRes.json();setCourses(d)}else{const d=await coursesRes.json().catch(()=>({}));errors.push(d.detail||"Failed to load courses")}
   if(overviewRes.ok){setOverview(await overviewRes.json())}else{const d=await overviewRes.json().catch(()=>({}));errors.push(d.detail||"Failed to load teaching overview")}
   setError(errors.join(" · "))
  }catch{setError("Unable to reach the LMS backend. Check the deployed API URL.")}}
