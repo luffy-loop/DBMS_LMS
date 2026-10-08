@@ -11,14 +11,20 @@ if not url:
 elif url.startswith("postgresql://"):
     url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-engine = create_engine(
-    url,
-    pool_pre_ping=True,
-    pool_size=20,
-    max_overflow=10,
-    pool_recycle=1800,
-    pool_timeout=30,
-)
+engine_kwargs = {
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,
+    "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "10")),
+}
+if url.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs.update({
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "10")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    })
+
+engine = create_engine(url, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

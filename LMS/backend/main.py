@@ -1,3 +1,5 @@
+import asyncio
+import os
 import time
 import logging
 from datetime import datetime, timedelta, timezone
@@ -27,43 +29,50 @@ from exam_evaluation import router as exam_router, evaluate_and_record_exam
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lms.api")
 
-with engine.begin() as conn:
-    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_courses_teacher_id ON courses(teacher_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assignments_course_id ON assignments(course_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assignments_teacher_id ON assignments(teacher_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_submissions_assignment_id ON submissions(assignment_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_submissions_student_id ON submissions(student_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_enrollments_student_course ON enrollments(student_id, course_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_questions_assignment ON assessment_questions(assignment_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_options_question ON assessment_question_options(question_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assessment_rubrics_question ON assessment_question_rubrics(question_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sqa_submission ON student_question_answers(submission_id);"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sqa_student ON student_question_answers(student_id);"))
+app = FastAPI(title="LMS")
 
-try:
-    mongo_db.resources.create_index("assignment_id")
-    mongo_db.resources.create_index("course_id")
-    mongo_db.submission_files.create_index("submission_id")
-except Exception:
-    pass
+@app.on_event("startup")
+async def startup():
+    if os.getenv("RUN_DB_SETUP", "false").lower() != "true":
+        return
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_courses_teacher_id ON courses(teacher_id)",
+            "CREATE INDEX IF NOT EXISTS ix_assignments_course_id ON assignments(course_id)",
+            "CREATE INDEX IF NOT EXISTS ix_assignments_teacher_id ON assignments(teacher_id)",
+            "CREATE INDEX IF NOT EXISTS ix_submissions_assignment_id ON submissions(assignment_id)",
+            "CREATE INDEX IF NOT EXISTS ix_submissions_student_id ON submissions(student_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enrollments_student_course ON enrollments(student_id, course_id)",
+            "CREATE INDEX IF NOT EXISTS ix_assessment_questions_assignment ON assessment_questions(assignment_id)",
+            "CREATE INDEX IF NOT EXISTS ix_assessment_options_question ON assessment_question_options(question_id)",
+            "CREATE INDEX IF NOT EXISTS ix_assessment_rubrics_question ON assessment_question_rubrics(question_id)",
+            "CREATE INDEX IF NOT EXISTS ix_sqa_submission ON student_question_answers(submission_id)",
+            "CREATE INDEX IF NOT EXISTS ix_sqa_student ON student_question_answers(student_id)",
+        ):
+            conn.execute(text(stmt))
+        for stmt in (
+            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS type VARCHAR DEFAULT 'assignment'",
+            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS start_time TIMESTAMP",
+            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP",
+            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS section VARCHAR DEFAULT 'Unassigned'",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS evaluator_confidence DOUBLE PRECISION",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) DEFAULT 'auto_finalized'",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_override_marks DOUBLE PRECISION",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_review_note TEXT",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP",
+            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        ):
+            conn.execute(text(stmt))
+    try:
+        mongo_db.resources.create_index("assignment_id")
+        mongo_db.resources.create_index("course_id")
+        mongo_db.submission_files.create_index("submission_id")
+    except Exception as exc:
+        logger.warning("Optional MongoDB indexes unavailable: %s", exc)
 
 Base.metadata.create_all(bind=engine)
-
-with engine.begin() as conn:
-    conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS type VARCHAR DEFAULT 'assignment'"))
-    conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS start_time TIMESTAMP"))
-    conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP"))
-    conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER"))
-    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS section VARCHAR DEFAULT 'Unassigned'"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS evaluator_confidence DOUBLE PRECISION"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) DEFAULT 'auto_finalized'"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_override_marks DOUBLE PRECISION"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_review_note TEXT"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP"))
-    conn.execute(text("ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL"))
-
-app = FastAPI(title="LMS")
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -91,6 +100,7 @@ app.include_router(exam_router)
 
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+LOGIN_DUMMY_HASH = pwd.hash(os.getenv("AUTH_DUMMY_PASSWORD", "lms-dummy-password"))
 
 @app.get("/")
 def home():
@@ -101,7 +111,7 @@ def health():
     return {"status": "ok"}
 
 @app.post("/register")
-def register(data: Register, db: Session = Depends(get_db)):
+async def register(data: Register, db: Session = Depends(get_db)):
     t0 = time.perf_counter()
     user = db.query(User).filter(User.email == data.roll_no).first()
     if user:
@@ -109,7 +119,8 @@ def register(data: Register, db: Session = Depends(get_db)):
     if data.role not in ["student", "teacher", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     section = "Unassigned"
-    user = User(name=data.name, email=data.roll_no, password=pwd.hash(data.password), role=data.role, section=section)
+    password_hash = await asyncio.to_thread(pwd.hash, data.password)
+    user = User(name=data.name, email=data.roll_no, password=password_hash, role=data.role, section=section)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -118,10 +129,12 @@ def register(data: Register, db: Session = Depends(get_db)):
     return {"message": "User registered successfully", "id": user.id, "role": user.role}
 
 @app.post("/login")
-def login(data: Login, db: Session = Depends(get_db)):
+async def login(data: Login, db: Session = Depends(get_db)):
     t0 = time.perf_counter()
     user = db.query(User).filter(User.email == data.roll_no).first()
-    if not user or not pwd.verify(data.password, user.password):
+    stored_hash = user.password if user else LOGIN_DUMMY_HASH
+    valid = await asyncio.to_thread(pwd.verify, data.password, stored_hash)
+    if not user or not valid:
         raise HTTPException(status_code=401, detail="Invalid roll number or password")
     token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
     dur = (time.perf_counter() - t0) * 1000
