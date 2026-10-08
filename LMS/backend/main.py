@@ -32,6 +32,7 @@ from analytics import router as analytics_router
 from exam_evaluation import router as exam_router, evaluate_and_record_exam
 from material_service import build_metadata, duplicate_hash, prepare_resource, validate_file
 from materials import router as materials_router, _process_and_notify
+from audit_log import router as audit_router, record_audit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lms.api")
@@ -141,6 +142,7 @@ app.include_router(analytics_router)
 app.include_router(exam_router)
 app.include_router(notifications_router)
 app.include_router(materials_router)
+app.include_router(audit_router)
 
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -199,6 +201,7 @@ async def login(data: Login, db: Session = Depends(get_db)):
     if not user or not valid:
         raise HTTPException(status_code=401, detail="Invalid roll number or password")
     token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
+    record_audit(db, user.id, "login", "user", user.id, {"role": user.role})
     dur = (time.perf_counter() - t0) * 1000
     logger.info(f"[AUTH] Login for user={user.id} ({user.role}) took {dur:.2f}ms")
     return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
@@ -283,6 +286,7 @@ def create_course(data: CourseCreate, user=Depends(get_user), db: Session = Depe
     db.add(course)
     db.commit()
     db.refresh(course)
+    record_audit(db, user["id"], "course_created", "course", course.id, {"title": course.title})
     return {"message": "Course created", "id": course.id, "title": course.title}
 
 
@@ -305,6 +309,7 @@ def update_course(course_id: int, data: CourseUpdate, user=Depends(get_user), db
     db.commit()
     student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
     notify_users(db, student_ids, "course_update", "Course updated", f"{course.title} was updated.", "course", course.id)
+    record_audit(db, user["id"], "course_updated", "course", course.id, {"title": course.title})
     return {"message": "Course updated", "id": course.id, "title": course.title, "description": course.description}
 
 
@@ -333,6 +338,7 @@ def enroll(data: EnrollmentCreate, user=Depends(get_user), db: Session = Depends
     enrollment = Enrollment(student_id=user["id"], course_id=data.course_id)
     db.add(enrollment)
     db.commit()
+    record_audit(db, user["id"], "enrollment_created", "course", course.id, {"student_id": user["id"]})
     return {"message": "Enrolled successfully", "course_id": course.id}
 
 @app.get("/my-courses")
@@ -415,6 +421,7 @@ async def create_assignment(
 
     student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
     notify_users(db, student_ids, "assignment_created", f"New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
+    record_audit(db, user["id"], "assignment_created", "assignment", assignment.id, {"course_id": course.id, "type": type})
 
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
 
@@ -863,6 +870,7 @@ def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Sessi
     submission.marks = marks
     db.commit()
     notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
+    record_audit(db, user["id"], "grading_completed", "submission", submission.id, {"assignment_id": assignment.id, "marks": marks})
     return {"message": "Marks updated", "submission_id": submission.id, "marks": marks}
 
 @app.get("/my-marks")
@@ -892,6 +900,7 @@ async def add_resources_batch(course_id: int, background_tasks: BackgroundTasks,
             insert=await asyncio.to_thread(mongo_db.resources.insert_one,meta)
             resource_id=str(insert.inserted_id)
             background_tasks.add_task(_process_and_notify,resource_id)
+            record_audit(db, user["id"], "material_uploaded", "resource", resource_id, {"course_id": course_id, "filename": meta["filename"]})
             results.append({"id":resource_id,"filename":meta["filename"],"title":meta["title"],"status":"UPLOADED","extension":suffix})
         except HTTPException as exc:
             results.append({"filename":file.filename or "file","status":"FAILED","error":str(exc.detail)})
@@ -1003,22 +1012,32 @@ def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access only")
     role_counts = dict(db.query(User.role, func.count(User.id)).group_by(User.role).all())
-    total_users = sum(role_counts.values())
-    students_count = role_counts.get("student", 0)
-    teachers_count = role_counts.get("teacher", 0)
-    admins_count = role_counts.get("admin", 0)
-    courses_count = db.query(Course.id).count()
-    assignments_count = db.query(Assignment.id).count()
-    submissions_count = db.query(Submission.id).count()
-    return {
-        "users": total_users,
-        "students": students_count,
-        "teachers": teachers_count,
-        "admins": admins_count,
-        "courses": courses_count,
-        "assignments": assignments_count,
-        "submissions": submissions_count
-    }
+    materials_count = 0
+    try:
+        materials_count = mongo_db.resources.count_documents({})
+    except Exception:
+        pass
+    from models import AIJob, AuditLog
+    return {"users": sum(role_counts.values()), "students": role_counts.get("student", 0), "teachers": role_counts.get("teacher", 0), "admins": role_counts.get("admin", 0), "courses": db.query(Course.id).count(), "enrollments": db.query(Enrollment.id).count(), "assignments": db.query(Assignment.id).count(), "submissions": db.query(Submission.id).count(), "materials": materials_count, "ai_jobs": db.query(AIJob.id).count(), "audit_events": db.query(AuditLog.id).count()}
+
+@app.get("/admin/system-health")
+def admin_system_health(user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    postgres = False
+    mongodb = False
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        postgres = True
+    except Exception:
+        pass
+    try:
+        mongo_db.command("ping")
+        mongodb = True
+    except Exception:
+        pass
+    return {"backend": "ok", "postgres": postgres, "mongodb": mongodb, "ai": {"mode": "local-grounded-retrieval", "configured": True}, "version": os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "unknown", "runtime": os.getenv("RENDER_SERVICE_NAME") or "local"}
 
 @app.get("/ai-search")
 async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):

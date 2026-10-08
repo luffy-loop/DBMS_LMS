@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from auth import get_user
@@ -25,6 +25,12 @@ class QuizQuestionPublish(BaseModel):
     answer: str = Field(min_length=1, max_length=1000)
     max_marks: int = Field(default=1, ge=1, le=100)
     explanation: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_answer(self):
+        if self.answer.strip() not in {option.strip() for option in self.options}:
+            raise ValueError("Correct answer must be one of the provided options")
+        return self
 
 
 class QuizAssignmentRequest(BaseModel):

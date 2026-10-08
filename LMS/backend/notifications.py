@@ -11,6 +11,36 @@ from notification_service import notify_users
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+def _ensure_deadline_notifications(user_id, db):
+    if not user_id:
+        return
+    from datetime import timedelta
+    from models import Assignment, Enrollment, Submission
+    now = datetime.now()
+    horizon = now + timedelta(hours=24)
+    try:
+        rows = db.query(Assignment).join(Enrollment, Enrollment.course_id == Assignment.course_id).filter(Enrollment.student_id == user_id).all()
+    except Exception:
+        db.rollback()
+        return
+    existing = {row.entity_id for row in db.query(Notification).filter(Notification.user_id == user_id, Notification.notification_type == "deadline_approaching", Notification.entity_type == "assignment").all()}
+    created = False
+    for assignment in rows:
+        deadline = assignment.end_time
+        if assignment.start_time and assignment.duration_minutes:
+            derived = assignment.start_time + timedelta(minutes=assignment.duration_minutes)
+            deadline = min([x for x in [deadline, derived] if x is not None], default=None)
+        if not deadline or not (now < deadline <= horizon):
+            continue
+        if db.query(Submission.id).filter(Submission.assignment_id == assignment.id, Submission.student_id == user_id).first():
+            continue
+        if str(assignment.id) not in existing:
+            db.add(Notification(user_id=user_id, notification_type="deadline_approaching", title="Deadline approaching", message=f"{assignment.title} is due within 24 hours.", created_at=datetime.utcnow(), entity_type="assignment", entity_id=str(assignment.id)))
+            created = True
+    if created:
+        db.commit()
+
+
 
 class SystemNotificationCreate(BaseModel):
     title: str
@@ -26,6 +56,7 @@ def list_notifications(
     user=Depends(get_user),
     db: Session = Depends(get_db),
 ):
+    _ensure_deadline_notifications(user["id"], db)
     query = db.query(Notification).filter(Notification.user_id == user["id"])
     if unread_only:
         query = query.filter(Notification.read_at.is_(None))

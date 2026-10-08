@@ -147,3 +147,15 @@ class AIJob(Base):
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
     assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action = Column(String(80), nullable=False, index=True)
+    entity_type = Column(String(40), nullable=True, index=True)
+    entity_id = Column(String(100), nullable=True)
+    details = Column(String(2000), nullable=True)
+    created_at = Column(DateTime, nullable=False, index=True)
+    __table_args__ = (Index("ix_audit_logs_created_action", "created_at", "action"), Index("ix_audit_logs_user_created", "user_id", "created_at"))
