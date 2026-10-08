@@ -1,88 +1,133 @@
-import { useState } from "react"
-import { BookOpen, LayoutDashboard, ClipboardList, Award, Search, LogOut, User, BrainCircuit, Sparkles, RotateCcw, CheckCircle2, XCircle } from "lucide-react"
+import { useEffect, useState } from "react"
+import { CheckCircle2, XCircle, Sparkles, Loader2, Ban, Send, Plus, Trash2 } from "lucide-react"
+import AppLayout from "../components/AppLayout"
+import { apiJson, ApiError } from "../api"
 import { useNavigate } from "react-router-dom"
-import { API } from "../config"
 
+type Course={id:number;title:string;description:string}
+type Question={id:number;question:string;context:string;options:string[];answer:string;source:string;max_marks:number;explanation?:string}
+type JobResult={title:string;course_id:number;questions:Question[];metrics?:Record<string,number>}
+type Job={job_id:string;status:string;result:JobResult|null;error?:{message?:string}|string|null}
 
-type Q={id:number;question:string;context:string;options:string[];answer:string;source:string}
-
-export default function QuizLab(){
+export default function QuizLab() {
   const navigate=useNavigate()
-  const [questions,setQuestions]=useState<Q[]>([])
-  const [answers,setAnswers]=useState<Record<number,string>>({})
-  const [score,setScore]=useState<number|null>(null)
-  const [loading,setLoading]=useState(false)
-  const [error,setError]=useState("")
   const role=localStorage.getItem("role")||"student"
-  const name=localStorage.getItem("name")||"User"
+  const [courses,setCourses]=useState<Course[]>([])
+  const [courseId,setCourseId]=useState("")
+  const [jobId,setJobId]=useState("")
+  const [status,setStatus]=useState("IDLE")
+  const [result,setResult]=useState<JobResult|null>(null)
+  const [questions,setQuestions]=useState<Question[]>([])
+  const [error,setError]=useState("")
+  const [title,setTitle]=useState("Course Revision Quiz")
+  const [description,setDescription]=useState("AI-generated quiz reviewed and published by the teacher.")
+  const [startTime,setStartTime]=useState("")
+  const [endTime,setEndTime]=useState("")
+  const [duration,setDuration]=useState("")
+  const [publishing,setPublishing]=useState(false)
 
-  async function generate(){
-    const token=localStorage.getItem("token")
-    if(!token){navigate("/login");return}
-    setLoading(true);setError("");setScore(null);setAnswers({})
-    try{
-      const r=await fetch(API+"/quiz/generate",{headers:{Authorization:"Bearer "+token}})
-      const d=await r.json()
-      if(!r.ok)throw new Error(d.detail||"Quiz generation failed")
-      setQuestions(d.questions)
-    }catch(e){setError(e instanceof TypeError?"Unable to reach the quiz service. Check the deployed backend URL.":e instanceof Error?e.message:"Quiz generation failed")}
-    finally{setLoading(false)}
+  useEffect(() => {
+    if(!localStorage.getItem("token")) { navigate("/login"); return }
+    apiJson<Course[]>("/my-courses").then(data=>{setCourses(data);if(data[0])setCourseId(String(data[0].id))}).catch(()=>setError("Unable to load your courses"))
+  },[navigate])
+
+  useEffect(() => {
+    if(!jobId || ["COMPLETED","FAILED","CANCELLED"].includes(status)) return
+    const timer=window.setInterval(async()=>{
+      try {
+        const job=await apiJson<Job>("/quiz/jobs/"+jobId,{},10000)
+        setStatus(job.status)
+        if(job.result){setResult(job.result);setQuestions(job.result.questions)}
+        if(job.status==="FAILED") setError(typeof job.error==="string"?job.error:job.error?.message||"Quiz generation failed")
+      } catch(e) {
+        if(e instanceof ApiError && e.status===404) setError("Quiz job is no longer available. Please start again.")
+      }
+    },1200)
+    return()=>window.clearInterval(timer)
+  },[jobId,status])
+
+  async function generate() {
+    if(!courseId) {setError("Select a course first");return}
+    setError("");setResult(null);setQuestions([]);setStatus("QUEUED")
+    try {
+      const job=await apiJson<{job_id:string;status:string}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:5})},10000)
+      setJobId(job.job_id);setStatus(job.status)
+    } catch(e) {
+      setStatus("FAILED");setError(e instanceof Error?e.message:"Unable to start quiz generation")
+    }
   }
 
-  function finish(){
-    let s=0
-    questions.forEach(q=>{if(answers[q.id]===q.answer)s++})
-    setScore(s)
+  async function cancel() {
+    if(!jobId)return
+    try { const job=await apiJson<Job>("/quiz/jobs/"+jobId+"/cancel",{method:"POST"});setStatus(job.status) } catch(e){setError(e instanceof Error?e.message:"Unable to cancel")}
   }
 
-  function logout(){localStorage.clear();navigate("/login")}
+  function editQuestion(index:number,key:keyof Question,value:string|string[]) {
+    setQuestions(list=>list.map((q,i)=>i===index?{...q,[key]:value}:q))
+  }
+  function removeQuestion(index:number) { setQuestions(list=>list.filter((_,i)=>i!==index)) }
+  function addQuestion() { setQuestions(list=>[...list,{id:Date.now(),question:"New question",context:"Add course-grounded context before publishing.",options:["Option A","Option B","Option C","Option D"],answer:"Option A",source:"Teacher edited",max_marks:1}]) }
 
-  return <div className="lms-shell min-h-screen text-white">
-    <aside className="lms-sidebar fixed left-0 top-0 hidden h-screen w-64 border-r p-5 lg:block">
-      <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div></div>
-      <nav className="mt-8 space-y-2">
-        <Nav onClick={()=>navigate(role==="teacher"?"/teacher":role==="admin"?"/admin":"/dashboard")} icon={<LayoutDashboard size={18}/>} text="Dashboard"/>
-        <Nav onClick={()=>navigate("/courses")} icon={<BookOpen size={18}/>} text="My Courses"/>
-        <Nav onClick={()=>navigate("/assignments")} icon={<ClipboardList size={18}/>} text="Assignments"/>
-        <Nav onClick={()=>navigate("/marks")} icon={<Award size={18}/>} text="Marks"/>
-        <Nav onClick={()=>navigate("/search")} icon={<Search size={18}/>} text="AI Search"/>
-        <Nav onClick={()=>navigate("/copilot")} icon={<BrainCircuit size={18}/>} text="Study Copilot"/>
-        <Nav onClick={()=>navigate("/copilot")} icon={<BrainCircuit size={18}/>} text="AI Study Hub"/><Nav active icon={<Sparkles size={18}/>} text="Quiz Lab"/>
-      </nav>
-      <button onClick={logout} className="lms-nav absolute bottom-6 left-5 right-5"><LogOut size={18}/>Logout</button>
-    </aside>
+  async function publish() {
+    if(!jobId || !questions.length || !courseId)return
+    setPublishing(true);setError("")
+    try {
+      await apiJson("/quiz/jobs/"+jobId+"/assignment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        course_id:Number(courseId),title,description,start_time:startTime||null,end_time:endTime||null,duration_minutes:duration?Number(duration):null,
+        questions:questions.map(q=>({id:q.id,question:q.question,options:q.options,answer:q.answer,max_marks:q.max_marks,explanation:q.explanation||""}))
+      })},15000)
+      setStatus("PUBLISHED")
+    } catch(e) { setError(e instanceof Error?e.message:"Assignment publishing failed") }
+    finally { setPublishing(false) }
+  }
 
-    <main className="lg:ml-64">
-      <header className="lms-topbar sticky top-0 z-10 border-b px-6 py-5 lg:px-10"><p className="text-sm text-white/40">AI Quiz Lab</p><div className="flex items-center justify-between gap-4"><h2 className="mt-1 text-2xl font-semibold">Test what you actually know</h2><div className="hidden items-center gap-3 sm:flex"><span className="text-sm text-white/40">{name}</span><div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5"><User size={18}/></div></div></div></header>
+  const running=["QUEUED","RETRIEVING","GENERATING"].includes(status)
+  const statusText={QUEUED:"Queued — your request is saved.",RETRIEVING:"Retrieving authorized course material...",GENERATING:"Generating and validating grounded questions...",COMPLETED:"Quiz ready for review.",FAILED:"Generation failed.",CANCELLED:"Generation cancelled.",PUBLISHED:"Assignment published."}[status]||"Ready"
 
-      <section className="lms-grid min-h-[calc(100vh-90px)] p-6 lg:p-10">
-        <div className="mx-auto max-w-4xl">
-          <div className="lms-hero rounded-3xl p-7 lg:p-10">
-            <div className="relative z-[1] flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-              <div><div className="flex items-center gap-3"><div className="lms-icon flex h-12 w-12 items-center justify-center rounded-2xl"><Sparkles size={22}/></div><div><p className="text-sm font-medium text-violet-300">Retrieval-powered assessment</p><h3 className="mt-1 text-2xl font-semibold">Generate a fresh revision quiz.</h3></div></div><p className="mt-4 max-w-2xl text-sm leading-6 text-white/45">Questions are built from the indexed material already inside your LMS, so the quiz stays connected to your courses.</p></div>
-              <button onClick={generate} disabled={loading} className="lms-btn-primary shrink-0 rounded-xl px-5 py-3 text-sm">{loading?"Generating...":"Generate quiz"}<Sparkles size={16}/></button>
+  return <AppLayout title="AI Quiz Lab" subtitle="Assessment Studio">
+    <section className="lms-grid min-h-[calc(100vh-76px)] p-4 sm:p-6 lg:p-10">
+      <div className="mx-auto max-w-5xl">
+        <div className="lms-hero rounded-3xl p-6 sm:p-8 lg:p-10">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div><p className="text-sm font-medium text-violet-300">Grounded assessment generation</p><h2 className="mt-1 text-2xl font-semibold">Generate, review, then publish.</h2><p className="mt-3 max-w-2xl text-sm leading-6 text-white/45">Generation is a persisted job, so the browser never waits on one long request. Teachers must review the questions before publishing.</p></div>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <select value={courseId} onChange={e=>setCourseId(e.target.value)} className="lms-input min-w-56"><option value="">Select course</option>{courses.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}</select>
+              {running ? <button onClick={cancel} className="lms-btn-secondary rounded-xl px-5 py-3 text-sm"><Ban size={16}/>Cancel</button> : <button onClick={generate} disabled={!courseId || publishing} className="lms-btn-primary rounded-xl px-5 py-3 text-sm disabled:opacity-40"><Sparkles size={16}/>{status==="FAILED"?"Retry generation":"Generate quiz"}</button>}
             </div>
           </div>
-
-          {error&&<div className="mt-5 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-300">{error}</div>}
-
-          {questions.length>0&&<div className="mt-7 space-y-4">
-            <div className="flex items-center justify-between"><p className="text-sm text-white/45">{questions.length} questions · {Object.keys(answers).length}/{questions.length} answered</p>{score!==null&&<button onClick={generate} className="lms-btn-secondary rounded-xl px-4 py-2 text-sm"><RotateCcw size={15}/>New quiz</button>}</div>
-            {questions.map((q,i)=><div key={q.id} className="lms-card rounded-3xl p-6 lg:p-7">
-              <div className="flex items-start justify-between gap-4"><span className="rounded-full border border-violet-400/15 bg-violet-400/10 px-3 py-1 text-xs text-violet-300">Question {i+1}</span>{score!==null&&(answers[q.id]===q.answer?<CheckCircle2 className="text-emerald-300" size={19}/>:<XCircle className="text-red-300" size={19}/>)}</div>
-              <p className="mt-5 text-sm leading-6 text-white/45">"{q.context}"</p>
-              <h4 className="mt-4 text-base font-medium">{q.question}</h4>
-              <div className="mt-4 grid gap-2">{q.options.map(o=><button key={o} disabled={score!==null} onClick={()=>setAnswers(a=>({...a,[q.id]:o}))} className={"rounded-xl border px-4 py-3 text-left text-sm transition "+(answers[q.id]===o?"border-violet-400/50 bg-violet-400/10 text-white":"border-white/10 bg-white/[.025] text-white/60 hover:border-white/20 hover:bg-white/[.05]")}>{o}</button>)}</div>
-              {score!==null&&<p className="mt-4 text-xs text-white/40">Correct resource: <span className="text-white/70">{q.answer}</span></p>}
-            </div>)}
-            {score===null?<button disabled={Object.keys(answers).length!==questions.length} onClick={finish} className="lms-btn-primary w-full rounded-2xl py-4 text-sm disabled:cursor-not-allowed disabled:opacity-40">Submit quiz</button>:<div className="lms-card rounded-3xl p-8 text-center"><p className="text-sm text-white/40">Your score</p><p className="mt-2 text-5xl font-semibold">{score}/{questions.length}</p><p className="mt-3 text-sm text-white/45">{score===questions.length?"Perfect run.":"Review the highlighted answers and retry with a fresh quiz."}</p></div>}
-          </div>}
-
-          {!questions.length&&!loading&&!error&&<div className="mt-7 grid gap-4 md:grid-cols-3">{[["Fresh","Generate a different question mix each time."],["Grounded","Use the course resources already indexed by LMS."],["Instant","Submit and see your score immediately."]].map(([a,b])=><div key={a} className="lms-card rounded-2xl p-5"><p className="font-medium">{a}</p><p className="mt-2 text-sm leading-6 text-white/35">{b}</p></div>)}</div>}
         </div>
-      </section>
-    </main>
-  </div>
+
+        {status!=="IDLE" && <div role="status" aria-live="polite" className="mt-5 rounded-2xl border border-white/10 bg-white/[.03] p-4">
+          <div className="flex items-center gap-3">{running?<Loader2 className="animate-spin text-violet-300" size={18}/>:status==="COMPLETED"?<CheckCircle2 className="text-emerald-300" size={18}/>:status==="FAILED"?<XCircle className="text-red-300" size={18}/>:<Sparkles size={18} className="text-white/50"/>}<span className="text-sm">{statusText}</span></div>
+        </div>}
+        {error&&<div role="alert" className="mt-5 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-300">{error}</div>}
+
+        {result && questions.length>0 && <div className="mt-7 space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm text-white/40">{questions.length} questions</p><h3 className="text-xl font-semibold">{result.title}</h3></div>{role==="teacher"&&<button onClick={addQuestion} className="lms-btn-secondary rounded-xl px-4 py-2.5 text-sm"><Plus size={15}/>Add question</button>}</div>
+          {questions.map((q,index)=><div key={q.id} className="lms-card rounded-2xl p-5 sm:p-6">
+            <div className="flex items-start gap-3"><span className="rounded-full border border-violet-400/15 bg-violet-400/10 px-3 py-1 text-xs text-violet-300">Question {index+1}</span>{role==="teacher"&&<button onClick={()=>removeQuestion(index)} className="ml-auto text-white/30 hover:text-red-300" aria-label={"Remove question "+(index+1)}><Trash2 size={16}/></button>}</div>
+            {role==="teacher" ? <input value={q.question} onChange={e=>editQuestion(index,"question",e.target.value)} className="lms-input mt-4"/> : <h4 className="mt-4 font-medium">{q.question}</h4>}
+            <p className="mt-4 rounded-xl border border-white/5 bg-white/[.02] p-4 text-sm leading-6 text-white/55">{q.context}</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">{q.options.map((option,optionIndex)=><div key={optionIndex} className="flex items-center gap-2"><input value={option} onChange={e=>{const next=[...q.options];next[optionIndex]=e.target.value;editQuestion(index,"options",next)}} className="lms-input" aria-label={"Question "+(index+1)+" option "+(optionIndex+1)}/>{role==="teacher"&&<button onClick={()=>editQuestion(index,"answer",option)} className={"rounded-lg px-2 py-2 text-xs " + (q.answer===option?"bg-emerald-400/15 text-emerald-300":"text-white/30 hover:text-white")} aria-label={"Set option "+(optionIndex+1)+" as correct"}>✓</button>}</div>)}</div>
+            <p className="mt-3 text-xs text-white/30">Grounded source: {q.source}</p>
+          </div>)}
+
+          {role==="teacher" && status!=="PUBLISHED" && <div className="lms-card rounded-3xl p-6 sm:p-7">
+            <div className="flex items-center gap-3"><Send size={18} className="text-violet-300"/><div><h3 className="font-semibold">Publish as assignment</h3><p className="text-xs text-white/35">Review is complete only when you explicitly publish.</p></div></div>
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <Field label="Title"><input value={title} onChange={e=>setTitle(e.target.value)} className="lms-input"/></Field>
+              <Field label="Duration (minutes)"><input type="number" min="1" value={duration} onChange={e=>setDuration(e.target.value)} className="lms-input"/></Field>
+              <Field label="Description"><textarea value={description} onChange={e=>setDescription(e.target.value)} rows={3} className="lms-input sm:col-span-2"/></Field>
+              <Field label="Start date/time"><input type="datetime-local" value={startTime} onChange={e=>setStartTime(e.target.value)} className="lms-input"/></Field>
+              <Field label="Due date/time"><input type="datetime-local" value={endTime} onChange={e=>setEndTime(e.target.value)} className="lms-input"/></Field>
+            </div>
+            <button onClick={publish} disabled={publishing || !questions.length} className="lms-btn-primary mt-5 w-full rounded-xl py-3 text-sm disabled:opacity-40">{publishing?<><Loader2 size={16} className="animate-spin"/>Publishing...</>:<><Send size={16}/>Publish assignment to enrolled students</>}</button>
+          </div>}
+          {status==="PUBLISHED"&&<div role="status" className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-5 text-sm text-emerald-300">Assignment published. Enrolled students were notified automatically.</div>}
+        </div>}
+      </div>
+    </section>
+  </AppLayout>
 }
 
-function Nav({onClick,active,icon,text}:{onClick?:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"lms-nav "+(active?"active":"")}>{icon}{text}</button>}
+function Field({label,children}:{label:string;children:React.ReactNode}) { return <label className="block"><span className="mb-2 block text-sm text-white/60">{label}</span>{children}</label> }

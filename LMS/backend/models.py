@@ -125,6 +125,25 @@ class Notification(Base):
     message = Column(String(1000), nullable=False)
     read_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False)
+    entity_type = Column(String(40), nullable=True)
+    entity_id = Column(String(100), nullable=True)
     __table_args__ = (
         Index("ix_notifications_user_read_created", "user_id", "read_at", "created_at"),
+        Index("ix_notifications_user_entity", "user_id", "entity_type", "entity_id"),
     )
+
+
+class AIJob(Base):
+    __tablename__ = "ai_jobs"
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String(36), unique=True, nullable=False, index=True)
+    job_type = Column(String(40), nullable=False, index=True)
+    status = Column(String(30), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=True, index=True)
+    payload = Column(String, nullable=False, default="{}")
+    result = Column(String, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True)

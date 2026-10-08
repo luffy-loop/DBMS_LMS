@@ -44,3 +44,22 @@ Alembic contains a non-destructive baseline. Existing deployments must be verifi
 
 ## Limitations and future work
 Live deployment checks, live performance numbers, Docker runtime execution, Postman runtime execution, and participant usability results were not available in this validation environment. Large-scale load testing and independently deployed microservices remain future work.
+
+
+## Final UX / reliability pass
+
+The final pass adds a shared authenticated navigation shell, responsive mobile navigation, centralized API timeout/request-ID handling, notification UI, multi-format learning-material uploads, persisted material processing status, background indexing, bounded vector retrieval, AI Search timing metrics, bounded Study Copilot requests, and database-backed quiz generation jobs.
+
+The material pipeline validates filename, extension, MIME type, signatures/structure, size and duplicate SHA-256 content. Supported extraction paths include PDF, DOCX, PPTX, TXT/MD, CSV, XLSX and optional image OCR. Legacy DOC/PPT storage is accepted only when the deployment can safely extract them with the documented system utility; otherwise processing is marked FAILED rather than pretending the material is searchable.
+
+Quiz publication requires explicit teacher confirmation. Generated questions can be edited before publication, and publishing creates one course-level assignment plus deduplicated assignment notifications for enrolled students.
+
+The current AI quiz implementation is retrieval-grounded rather than an external LLM integration. The system therefore does not claim provider/model generation where none exists.
+
+## Verification limitations for this pass
+
+The GitHub repository tree was modified directly because the validation environment could not clone GitHub over outbound network access. Consequently, local execution of the full backend test suite, frontend build, browser accessibility audit, Docker runtime, Postman runtime and deployed Render endpoint checks were not executed in this environment.
+
+No production performance numbers are fabricated. Live AI, upload and search latency remain **NOT MEASURED — deployment/network limitation** until the benchmark is run against the deployed service.
+
+The code changes are intended to remove indefinite waits and architecture-level bottlenecks, but this document does not label the system production-ready merely because the source tree was updated.

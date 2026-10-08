@@ -391,3 +391,16 @@ The architecture is designed to be horizontally scalable because application sta
 Redis is intentionally not mandatory today. It can be introduced later for caching, rate limiting, or background-job coordination without changing the core LMS data model.
 
 The current API paths are preserved for frontend compatibility. The deployed frontend production variable `VITE_API_URL` remains `https://dbms-lms-hwvp.onrender.com`. A future versioned API can be introduced as a compatibility layer rather than breaking existing clients.
+
+
+## Learning materials and AI reliability
+
+Teachers can upload multiple learning materials in one workflow. Supported formats are PDF, DOCX, DOC, PPTX, PPT, TXT, MD, PNG/JPG/JPEG/WEBP, CSV and XLSX, subject to the deployment's safe extractor availability.
+
+Uploads are stored first and processed asynchronously. Each material exposes UPLOADED, PROCESSING, READY or FAILED state plus extraction/indexing status. The system validates extension, MIME type, file signature/structure, filename, size and duplicate SHA-256 content.
+
+AI Search uses bounded top-K retrieval, authorization-aware course filters, short-lived cache entries and timing metrics. Study Copilot runs retrieval outside the event loop and has a finite timeout. Quiz generation is a PostgreSQL-backed job workflow with queued/retrieving/generating/completed/failed/cancelled states.
+
+Teachers can review and edit generated questions before explicitly publishing them as course assignments. Publishing creates one course-level assignment and notifications for enrolled students.
+
+See docs/material-processing.md, docs/ai-workflows.md and docs/architecture-final.md for implementation boundaries and known limitations.

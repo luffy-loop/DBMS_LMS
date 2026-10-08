@@ -50,6 +50,9 @@ def list_notifications(
                 "message": item.message,
                 "read": item.read_at is not None,
                 "created_at": item.created_at.isoformat(),
+                "entity_type": item.entity_type,
+                "entity_id": item.entity_id,
+                "href": ("/assignments?assignment_id=" + item.entity_id) if item.entity_type == "assignment" else ("/courses" if item.entity_type == "resource" else None),
             }
             for item in rows
         ],
@@ -76,6 +79,21 @@ def mark_notification_read(
         item.read_at = datetime.now()
         db.commit()
     return {"message": "Notification marked as read", "id": item.id}
+
+
+
+@router.patch("/read-all")
+def mark_all_notifications_read(
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+):
+    count = (
+        db.query(Notification)
+        .filter(Notification.user_id == user["id"], Notification.read_at.is_(None))
+        .update({Notification.read_at: datetime.utcnow()}, synchronize_session=False)
+    )
+    db.commit()
+    return {"message": "Notifications marked as read", "count": count}
 
 
 @router.post("/system")

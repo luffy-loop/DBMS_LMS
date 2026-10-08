@@ -14,3 +14,8 @@ python-multipart
 pgvector
 pytest
 alembic
+python-docx
+python-pptx
+openpyxl
+pillow
+pytesseract

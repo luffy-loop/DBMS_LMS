@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pypdf import PdfReader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
@@ -24,13 +24,15 @@ from auth import get_user, key, alg
 from mongodb import mongo_db
 from notifications import router as notifications_router
 from notification_service import notify_users
-from vector_store import search_resources
+from vector_store import search_resources_detailed
 from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
 from quiz_generator import router as quiz_router
 from teacher_insights import router as teacher_insights_router
 from analytics import router as analytics_router
 from exam_evaluation import router as exam_router, evaluate_and_record_exam
+from material_service import build_metadata, duplicate_hash, prepare_resource, validate_file
+from materials import router as materials_router, _process_and_notify
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lms.api")
@@ -52,6 +54,8 @@ async def startup():
         mongo_db.resources.create_index("assignment_id")
         mongo_db.resources.create_index("course_id")
         mongo_db.submission_files.create_index("submission_id")
+        mongo_db.resources.create_index("processing_status")
+        mongo_db.resources.create_index([("course_id", 1), ("sha256", 1)], unique=False)
     except Exception as exc:
         logger.warning("Optional MongoDB indexes unavailable: %s", exc)
 
@@ -125,6 +129,7 @@ app.include_router(teacher_insights_router)
 app.include_router(analytics_router)
 app.include_router(exam_router)
 app.include_router(notifications_router)
+app.include_router(materials_router)
 
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -280,7 +285,7 @@ def update_course(course_id: int, data: CourseUpdate, user=Depends(get_user), db
     course.description = description
     db.commit()
     student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
-    notify_users(db, student_ids, "course_update", "Course updated", f"{course.title} was updated.")
+    notify_users(db, student_ids, "course_update", "Course updated", f"{course.title} was updated.", "course", course.id)
     return {"message": "Course updated", "id": course.id, "title": course.title, "description": course.description}
 
 
@@ -390,7 +395,7 @@ async def create_assignment(
         )
 
     student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
-    notify_users(db, student_ids, "assignment_created", "New assessment", f"{assignment.title} was added to {course.title}.")
+    notify_users(db, student_ids, "assignment_created", f"New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
 
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
 
@@ -838,7 +843,7 @@ def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Sessi
         raise HTTPException(status_code=400, detail="Marks cannot be negative")
     submission.marks = marks
     db.commit()
-    notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.")
+    notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
     return {"message": "Marks updated", "submission_id": submission.id, "marks": marks}
 
 @app.get("/my-marks")
@@ -848,93 +853,89 @@ def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
     return build_submission_payloads(subs, db)
 
+@app.post("/courses/{course_id}/resources/batch")
+async def add_resources_batch(course_id: int, background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), titles: list[str] | None = Form(None), user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "teacher": raise HTTPException(status_code=403, detail="Teacher access only")
+    course=db.query(Course).filter(Course.id==course_id,Course.teacher_id==user["id"]).first()
+    if not course: raise HTTPException(status_code=404,detail="Course not found")
+    if not files: raise HTTPException(status_code=400,detail="Select at least one file")
+    if len(files)>20: raise HTTPException(status_code=400,detail="Maximum 20 files per upload batch")
+    results=[]
+    for index,file in enumerate(files):
+        try:
+            data=await file.read(max_upload_bytes+1)
+            if len(data)>max_upload_bytes: raise HTTPException(status_code=413,detail=f"File exceeds the {max_upload_mb} MB limit")
+            suffix=validate_file(file.filename or "",file.content_type or "",data)
+            title=titles[index] if titles and index<len(titles) else ""
+            meta=build_metadata(file,data,course_id,user["id"],title)
+            duplicate=duplicate_hash(course_id,meta["sha256"])
+            if duplicate: raise HTTPException(status_code=409,detail=f"Duplicate file already exists: {duplicate.get('filename','file')}")
+            insert=await asyncio.to_thread(mongo_db.resources.insert_one,meta)
+            resource_id=str(insert.inserted_id)
+            background_tasks.add_task(_process_and_notify,resource_id)
+            results.append({"id":resource_id,"filename":meta["filename"],"title":meta["title"],"status":"UPLOADED","extension":suffix})
+        except HTTPException as exc:
+            results.append({"filename":file.filename or "file","status":"FAILED","error":str(exc.detail)})
+        except Exception as exc:
+            logger.exception("Upload failed for %s",file.filename)
+            results.append({"filename":file.filename or "file","status":"FAILED","error":str(exc)[:300]})
+    return {"course_id":course_id,"files":results}
+
+
 @app.post("/courses/{course_id}/resources")
-async def add_resource(course_id: int, file: UploadFile = File(...), title: str = Form(...), user=Depends(get_user), db: Session = Depends(get_db)):
-    if user["role"] != "teacher":
-        raise HTTPException(status_code=403, detail="Teacher access only")
-    course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    data, content = await read_pdf_upload(file)
-    result = await asyncio.to_thread(
-        mongo_db.resources.insert_one,
-        {"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": content, "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()}
-    )
-    student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course_id).all()]
-    notify_users(db, student_ids, "course_update", "Course update", f"New learning material was added to {course.title}.")
-    return {"message": "PDF uploaded", "id": str(result.inserted_id), "title": title}
+async def add_resource(course_id:int,background_tasks:BackgroundTasks,file:UploadFile=File(...),title:str=Form(""),user=Depends(get_user),db:Session=Depends(get_db)):
+    result=await add_resources_batch(course_id,background_tasks,[file],[title],user,db)
+    first=result["files"][0]
+    if first.get("status")=="FAILED":
+        raise HTTPException(status_code=409 if "Duplicate" in str(first.get("error")) else 400,detail=first.get("error","Upload failed"))
+    return {"message":"Learning material uploaded",**first}
+
 
 @app.get("/my-course-resources")
-def my_course_resources(user=Depends(get_user), db: Session = Depends(get_db)):
-    t0 = time.perf_counter()
-    if user["role"] == "student":
-        enrollments = db.query(Enrollment.course_id).filter(Enrollment.student_id == user["id"]).all()
-        cids = [e[0] for e in enrollments]
-    elif user["role"] == "teacher":
-        courses = db.query(Course.id).filter(Course.teacher_id == user["id"]).all()
-        cids = [c[0] for c in courses]
-    elif user["role"] == "admin":
-        courses = db.query(Course.id).all()
-        cids = [c[0] for c in courses]
-    else:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if not cids:
-        return {}
-
-    resources = mongo_db.resources.find(
-        {"course_id": {"$in": cids}, "assignment_id": {"$exists": False}},
-        {"_id": 1, "course_id": 1, "title": 1, "filename": 1, "created_at": 1}
-    )
-    res_map = {}
+def my_course_resources(user=Depends(get_user),db:Session=Depends(get_db)):
+    if user["role"]=="student": cids=[e[0] for e in db.query(Enrollment.course_id).filter(Enrollment.student_id==user["id"]).all()]
+    elif user["role"]=="teacher": cids=[c[0] for c in db.query(Course.id).filter(Course.teacher_id==user["id"]).all()]
+    elif user["role"]=="admin": cids=[c[0] for c in db.query(Course.id).all()]
+    else: raise HTTPException(status_code=403,detail="Access denied")
+    if not cids:return {}
+    resources=mongo_db.resources.find({"course_id":{"$in":cids},"assignment_id":{"$exists":False}}).sort("created_at",-1)
+    result={}
     for r in resources:
-        cid = r.get("course_id")
-        if cid:
-            res_map.setdefault(cid, []).append({
-                "id": str(r["_id"]),
-                "title": r.get("title", ""),
-                "filename": r.get("filename", ""),
-                "created_at": r.get("created_at")
-            })
-    dur = (time.perf_counter() - t0) * 1000
-    logger.info(f"[RESOURCES] my_course_resources for user={user['id']} ({len(cids)} courses) took {dur:.2f}ms")
-    return res_map
+        result.setdefault(r["course_id"],[]).append({"id":str(r["_id"]),"title":r.get("title",""),"filename":r.get("filename",""),"content_type":r.get("content_type",""),"size":r.get("size",0),"created_at":r.get("created_at"),"processing_status":r.get("processing_status","UPLOADED"),"extraction_status":r.get("extraction_status","PENDING"),"indexing_status":r.get("indexing_status","PENDING"),"error_message":r.get("error_message"),"page_count":r.get("page_count"),"slide_count":r.get("slide_count"),"ocr_status":r.get("ocr_status")})
+    return result
+
 
 @app.get("/courses/{course_id}/resources")
-def get_resources(course_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
-    if user["role"] not in ["student", "teacher", "admin"]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    if user["role"] == "student":
-        if not db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
-            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
-    elif user["role"] == "teacher":
-        if not db.query(Course.id).filter(Course.id == course_id, Course.teacher_id == user["id"]).first():
-            raise HTTPException(status_code=403, detail="You can only access your own course")
-    resources = mongo_db.resources.find(
-        {"course_id": course_id, "assignment_id": {"$exists": False}},
-        {"_id": 1, "title": 1, "filename": 1, "created_at": 1}
-    )
-    return [{"id": str(r["_id"]), "title": r.get("title", ""), "filename": r.get("filename", ""), "created_at": r.get("created_at")} for r in resources]
+def get_resources(course_id:int,user=Depends(get_user),db:Session=Depends(get_db)):
+    if user["role"] not in ["student","teacher","admin"]: raise HTTPException(status_code=403,detail="Access denied")
+    if user["role"]=="student" and not db.query(Enrollment.id).filter(Enrollment.student_id==user["id"],Enrollment.course_id==course_id).first(): raise HTTPException(status_code=403,detail="You are not enrolled in this course")
+    if user["role"]=="teacher" and not db.query(Course.id).filter(Course.id==course_id,Course.teacher_id==user["id"]).first(): raise HTTPException(status_code=403,detail="You can only access your own course")
+    resources=mongo_db.resources.find({"course_id":course_id,"assignment_id":{"$exists":False}}).sort("created_at",-1)
+    return [{"id":str(r["_id"]),"title":r.get("title",""),"filename":r.get("filename",""),"content_type":r.get("content_type",""),"size":r.get("size",0),"created_at":r.get("created_at"),"processing_status":r.get("processing_status","UPLOADED"),"extraction_status":r.get("extraction_status","PENDING"),"indexing_status":r.get("indexing_status","PENDING"),"error_message":r.get("error_message"),"page_count":r.get("page_count"),"slide_count":r.get("slide_count"),"ocr_status":r.get("ocr_status")} for r in resources]
+
+
+@app.get("/resources/{resource_id}/status")
+def resource_status(resource_id:str,user=Depends(get_user),db:Session=Depends(get_db)):
+    try: resource=mongo_db.resources.find_one({"_id":ObjectId(resource_id)})
+    except Exception: raise HTTPException(status_code=400,detail="Invalid resource id")
+    if not resource: raise HTTPException(status_code=404,detail="Resource not found")
+    course_id=resource.get("course_id")
+    if user["role"]=="student" and not db.query(Enrollment.id).filter(Enrollment.student_id==user["id"],Enrollment.course_id==course_id).first(): raise HTTPException(status_code=403,detail="Access denied")
+    if user["role"]=="teacher" and resource.get("teacher_id")!=user["id"]: raise HTTPException(status_code=403,detail="Access denied")
+    return {"id":resource_id,"status":resource.get("processing_status","UPLOADED"),"extraction_status":resource.get("extraction_status","PENDING"),"indexing_status":resource.get("indexing_status","PENDING"),"error_message":resource.get("error_message")}
+
 
 @app.get("/resources/{resource_id}/download")
-def download_resource(resource_id: str, user=Depends(get_user), db: Session = Depends(get_db)):
-    if user["role"] not in ["student", "teacher", "admin"]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    try:
-        resource = mongo_db.resources.find_one({"_id": ObjectId(resource_id)})
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid resource id")
-    if not resource:
-        raise HTTPException(status_code=404, detail="Resource not found")
-    course_id = resource.get("course_id")
-    if user["role"] == "student":
-        if not db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first():
-            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
-    elif user["role"] == "teacher" and resource.get("teacher_id") != user["id"]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    return StreamingResponse(iter([resource["file"]]), media_type=resource.get("content_type", "application/pdf"), headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "resource.pdf")}"'})
+def download_resource(resource_id:str,user=Depends(get_user),db:Session=Depends(get_db)):
+    if user["role"] not in ["student","teacher","admin"]: raise HTTPException(status_code=403,detail="Access denied")
+    try: resource=mongo_db.resources.find_one({"_id":ObjectId(resource_id)})
+    except Exception: raise HTTPException(status_code=400,detail="Invalid resource id")
+    if not resource: raise HTTPException(status_code=404,detail="Resource not found")
+    course_id=resource.get("course_id")
+    if user["role"]=="student" and not db.query(Enrollment.id).filter(Enrollment.student_id==user["id"],Enrollment.course_id==course_id).first(): raise HTTPException(status_code=403,detail="Access denied")
+    if user["role"]=="teacher" and resource.get("teacher_id")!=user["id"]: raise HTTPException(status_code=403,detail="Access denied")
+    return StreamingResponse(iter([resource["file"]]),media_type=resource.get("content_type","application/octet-stream"),headers={"Content-Disposition":f'inline; filename="{resource.get("filename","resource")}"'})
+
 
 @app.get("/submissions/{submission_id}/download")
 def download_submission(submission_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -1001,21 +1002,19 @@ def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     }
 
 @app.get("/ai-search")
-def ai_search(q: str, user=Depends(get_user), db: Session = Depends(get_db)):
-    if not q.strip():
-        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):
+    if not q.strip(): raise HTTPException(status_code=400,detail="Search query cannot be empty")
     try:
-        if user["role"] == "student":
-            course_ids = [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()]
-        elif user["role"] == "teacher":
-            course_ids = [c.id for c in db.query(Course.id).filter(Course.teacher_id == user["id"]).all()]
-        elif user["role"] == "admin":
-            course_ids = None
-        else:
-            raise HTTPException(status_code=403, detail="Access denied")
-        return {"query": q, "results": search_resources(q, course_ids)}
-    except HTTPException:
-        raise
+        if user["role"]=="student": course_ids=[e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id==user["id"]).all()]
+        elif user["role"]=="teacher": course_ids=[c.id for c in db.query(Course.id).filter(Course.teacher_id==user["id"]).all()]
+        elif user["role"]=="admin": course_ids=None
+        else: raise HTTPException(status_code=403,detail="Access denied")
+        started=time.perf_counter()
+        results,metrics=await asyncio.wait_for(asyncio.to_thread(search_resources_detailed,q,course_ids),timeout=15)
+        metrics["total_ms"]=round((time.perf_counter()-started)*1000,2)
+        return {"query":q,"results":results,"metrics":metrics}
+    except asyncio.TimeoutError: raise HTTPException(status_code=504,detail={"error":"AI_TIMEOUT","message":"Search took too long. Please retry."})
+    except HTTPException: raise
     except Exception:
         logger.exception("Search service failed")
-        raise HTTPException(status_code=503, detail="Search service unavailable")
+        raise HTTPException(status_code=503,detail={"error":"SEARCH_UNAVAILABLE","message":"Search service unavailable. Please retry."})

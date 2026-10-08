@@ -1,44 +1,54 @@
-import { useEffect,useState } from "react"
-import { BookOpen,LayoutDashboard,ClipboardList,Award,Search,LogOut,Check,FileText,Download } from "lucide-react"
+import { useEffect, useState } from "react"
+import { BookOpen, Check, Download, FileText, Image, Presentation, Table2, File, RefreshCw } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { API } from "../config"
-type Course={id:number;title:string;description:string;teacher_id:number};type Resource={id:string;title:string;filename:string}
+import AppLayout from "../components/AppLayout"
+import { apiJson, ApiError } from "../api"
+
+type Course={id:number;title:string;description:string;teacher_id:number}
+type Resource={id:string;title:string;filename:string;content_type:string;size:number;processing_status:string;extraction_status:string;indexing_status:string;error_message?:string|null;page_count?:number;slide_count?:number;ocr_status?:string}
+
 export default function Courses(){
- const navigate=useNavigate(),[courses,setCourses]=useState<Course[]>([]),[mine,setMine]=useState<Course[]>([]),[res,setRes]=useState<Record<number,Resource[]>>({}),[error,setError]=useState("")
-const role=localStorage.getItem("role")||"student"
- useEffect(()=>{const t=localStorage.getItem("token");if(!t){navigate("/login");return}load(t)},[navigate])
-  async function load(t: string) {
-    try {
-      const [allRes, mineRes, resRes] = await Promise.all([
-        fetch(API + "/courses", { headers: { Authorization: "Bearer " + t } }),
-        role === "student" ? fetch(API + "/my-courses", { headers: { Authorization: "Bearer " + t } }) : Promise.resolve(null),
-        fetch(API + "/my-course-resources", { headers: { Authorization: "Bearer " + t } })
-      ])
-      const all = allRes.ok ? await allRes.json() : []
-      setCourses(all)
-      const m = role === "student"
-        ? (mineRes && mineRes.ok ? await mineRes.json() : [])
-        : all.filter((c: Course) => c.teacher_id === Number(localStorage.getItem("userId")))
-      setMine(m)
-      if (resRes && resRes.ok) {
-        setRes(await resRes.json())
-      } else if (m.length > 0) {
-        const pairs = await Promise.all(
-          m.map(async (c: Course) => [
-            c.id,
-            await fetch(API + "/courses/" + c.id + "/resources", { headers: { Authorization: "Bearer " + t } }).then(r => r.ok ? r.json() : [])
-          ] as const)
-        )
-        setRes(Object.fromEntries(pairs))
-      }
-    } catch {
-      setError("Failed to load courses")
-    }
-  }
- async function enroll(id:number){const t=localStorage.getItem("token");if(!t)return;const r=await fetch(API+"/enroll",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+t},body:JSON.stringify({course_id:id})});if(r.ok)load(t)}
- async function openPdf(id:string){const t=localStorage.getItem("token");if(!t)return navigate("/login");try{const r=await fetch(API+"/resources/"+id+"/download",{headers:{Authorization:"Bearer "+t}});if(!r.ok)throw new Error("Unable to open PDF");const blob=await r.blob();const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener,noreferrer");setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(e){setError(e instanceof Error?e.message:"Unable to open PDF")}}
- function logout(){localStorage.clear();navigate("/login")}
- return <div className="min-h-screen bg-[#070b14] text-white"><aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-white/10 bg-[#0b101a] p-5 lg:block"><Brand/><nav className="mt-8 space-y-2"><Nav onClick={()=>navigate(role==="teacher"?"/teacher":"/dashboard")} icon={<LayoutDashboard size={18}/>} text="Dashboard"/><Nav active onClick={()=>{}} icon={<BookOpen size={18}/>} text="My Courses"/><Nav onClick={()=>navigate("/assignments")} icon={<ClipboardList size={18}/>} text="Assignments"/><Nav onClick={()=>navigate("/marks")} icon={<Award size={18}/>} text="Marks"/><Nav onClick={()=>navigate("/search")} icon={<Search size={18}/>} text="AI Search"/></nav><button onClick={logout} className="nav absolute bottom-6 left-5 right-5"><LogOut size={18}/>Logout</button></aside><main className="lg:ml-64"><header className="border-b border-white/10 px-6 py-5 lg:px-10"><p className="text-sm text-white/40">{role==="teacher"?"Teacher":"Student"}</p><h2 className="mt-1 text-2xl font-semibold">Course Library</h2></header><section className="p-6 lg:p-10">{error&&<div className="mb-6 text-sm text-red-300">{error}</div>}<h3 className="text-xl font-semibold">{role==="student"?"Available Courses":"My Courses"}</h3><p className="mt-1 text-sm text-white/40">Access course resources and teacher-uploaded PDFs.</p><div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{courses.map(c=>{const enrolled=mine.some(x=>x.id===c.id);return <div key={c.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6"><div className="flex items-start justify-between"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10"><BookOpen size={20}/></div>{role==="student"&&enrolled&&<span className="flex items-center gap-1 rounded-full bg-green-400/10 px-3 py-1 text-xs text-green-300"><Check size={13}/>Enrolled</span>}</div><h4 className="mt-6 text-lg font-medium">{c.title}</h4><p className="mt-2 text-sm text-white/40">{c.description}</p>{role==="student"&&!enrolled?<button onClick={()=>enroll(c.id)} className="mt-6 w-full rounded-xl bg-white py-3 text-sm font-medium text-black">Enroll Now</button>:enrolled&&<div className="mt-6 border-t border-white/10 pt-5"><p className="text-sm font-medium">Course Materials</p>{!res[c.id]?.length?<p className="mt-2 text-xs text-white/30">No PDFs uploaded yet.</p>:<div className="mt-3 space-y-2">{res[c.id].map(x=><button key={x.id} onClick={()=>openPdf(x.id)} className="flex w-full items-center justify-between rounded-xl border border-white/10 px-4 py-3 text-sm text-left hover:bg-white/5"><span className="flex min-w-0 items-center gap-2"><FileText size={16}/><span className="truncate">{x.title}</span></span><Download size={15}/></button>)}</div>}</div>}</div>})}</div></section></main></div>
+ const navigate=useNavigate()
+ const role=localStorage.getItem("role")||"student"
+ const [courses,setCourses]=useState<Course[]>([])
+ const [mine,setMine]=useState<Course[]>([])
+ const [res,setRes]=useState<Record<number,Resource[]>>({})
+ const [error,setError]=useState("")
+ const [loading,setLoading]=useState(true)
+
+ async function load(){
+  setLoading(true);setError("")
+  try{
+   const all=await apiJson<Course[]>("/courses?page=1&page_size=100")
+   setCourses(all)
+   const own=role==="student"?await apiJson<Course[]>("/my-courses"):all.filter(c=>c.teacher_id===Number(localStorage.getItem("userId")))
+   setMine(own)
+   const data=await apiJson<Record<number,Resource[]>>("/my-course-resources")
+   setRes(data)
+  }catch(e){setError(e instanceof Error?e.message:"Failed to load courses")}
+  finally{setLoading(false)}
+ }
+ useEffect(()=>{if(!localStorage.getItem("token")){navigate("/login");return}load()},[navigate])
+
+ async function enroll(id:number){
+  try{await apiJson("/enroll",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:id})});await load()}catch(e){setError(e instanceof Error?e.message:"Enrollment failed")}
+ }
+ async function openResource(id:string){
+  try{
+   const {response}=await import("../api").then(m=>m.apiFetch("/resources/"+id+"/download",{},30000))
+   const blob=await response.blob();const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener,noreferrer");window.setTimeout(()=>URL.revokeObjectURL(url),60000)
+  }catch(e){setError(e instanceof ApiError?e.message:"Unable to open material")}
+ }
+
+ return <AppLayout title="Course Library" subtitle={role==="teacher"?"Teaching Workspace":"Learning Materials"}>
+  <section className="lms-grid min-h-[calc(100vh-76px)] p-4 sm:p-6 lg:p-10">
+   <div className="mx-auto max-w-7xl">
+    {error&&<div role="alert" className="mb-5 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-300">{error}<button onClick={load} className="ml-3 underline">Retry</button></div>}
+    <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">{role==="student"?"Available Courses":"My Courses"}</h2><p className="mt-1 text-sm text-white/40">Access searchable course materials and processing status.</p></div><button onClick={load} className="lms-btn-secondary rounded-xl px-3 py-2 text-sm"><RefreshCw size={15}/>Refresh</button></div>
+    {loading?<div className="mt-8 lms-empty rounded-2xl p-10 text-center text-sm text-white/40">Loading courses...</div>:<div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{courses.map(course=>{const enrolled=mine.some(c=>c.id===course.id);const materials=res[course.id]||[];return <article key={course.id} className="lms-card rounded-2xl p-6"><div className="flex items-start justify-between"><div className="lms-icon flex h-11 w-11 items-center justify-center rounded-xl"><BookOpen size={20}/></div>{role==="student"&&enrolled&&<span className="flex items-center gap-1 rounded-full bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300"><Check size={13}/>Enrolled</span>}</div><h3 className="mt-5 text-lg font-medium">{course.title}</h3><p className="mt-2 text-sm leading-6 text-white/40">{course.description}</p>{role==="student"&&!enrolled?<button onClick={()=>enroll(course.id)} className="lms-btn-primary mt-6 w-full rounded-xl py-3 text-sm">Enroll now</button>:enrolled&&<div className="mt-6 border-t border-white/10 pt-5"><p className="text-sm font-medium">Learning materials</p><div className="mt-3 space-y-2">{materials.length?materials.map(resource=><div key={resource.id} className="rounded-xl border border-white/10 bg-white/[.02] p-3"><div className="flex items-center gap-3"><MaterialIcon type={resource.content_type}/><div className="min-w-0 flex-1"><p className="truncate text-sm">{resource.title}</p><p className="mt-1 text-[11px] text-white/30">{formatBytes(resource.size)} · {resource.processing_status}</p></div>{resource.processing_status==="READY"&&<button onClick={()=>openResource(resource.id)} className="lms-btn-secondary rounded-lg p-2" aria-label={"Open "+resource.title}><Download size={14}/></button>}</div>{resource.processing_status==="FAILED"&&<p className="mt-2 text-xs text-red-300">{resource.error_message||"Processing failed"}</p>}</div>):<p className="mt-2 text-xs text-white/30">No materials uploaded yet.</p>}</div></div>}</article>})}</div>}
+   </div>
+  </section>
+ </AppLayout>
 }
-function Brand(){return <div className="flex items-center gap-3 px-3 py-4"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><BookOpen size={21}/></div><div><h1 className="font-semibold">LMS</h1><p className="text-xs text-white/40">Learning Platform</p></div></div>}
-function Nav({onClick,active,icon,text}:{onClick:()=>void;active?:boolean;icon:React.ReactNode;text:string}){return <button onClick={onClick} className={"nav "+(active?"active":"")}>{icon}{text}</button>}
+function MaterialIcon({type}:{type:string}){if(type.startsWith("image/"))return <Image size={17} className="shrink-0 text-cyan-300"/>;if(type.includes("presentation"))return <Presentation size={17} className="shrink-0 text-orange-300"/>;if(type.includes("spreadsheet")||type.includes("csv"))return <Table2 size={17} className="shrink-0 text-emerald-300"/>;if(type.includes("pdf")||type.includes("word")||type.includes("text"))return <FileText size={17} className="shrink-0 text-violet-300"/>;return <File size={17} className="shrink-0"/>}
+function formatBytes(value:number){if(value<1024)return value+" B";if(value<1024*1024)return(value/1024).toFixed(1)+" KB";return(value/1024/1024).toFixed(1)+" MB"}
