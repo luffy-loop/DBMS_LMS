@@ -19,9 +19,11 @@ from jose import jwt
 from bson import ObjectId
 from database import Base, engine, get_db
 from models import User, Course, Enrollment, Assignment, Submission
-from schemas import Register, Login, CourseCreate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
+from schemas import Register, Login, CourseCreate, CourseUpdate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
 from auth import get_user, key, alg
 from mongodb import mongo_db
+from notifications import router as notifications_router
+from notification_service import notify_users
 from vector_store import search_resources
 from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
@@ -39,39 +41,13 @@ app = FastAPI(title="LMS")
 async def startup():
     if os.getenv("RUN_DB_SETUP", "false").lower() != "true":
         return
-    if engine.dialect.name == "postgresql":
-        with engine.begin() as conn:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-    Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        for stmt in (
-            "CREATE INDEX IF NOT EXISTS ix_courses_teacher_id ON courses(teacher_id)",
-            "CREATE INDEX IF NOT EXISTS ix_assignments_course_id ON assignments(course_id)",
-            "CREATE INDEX IF NOT EXISTS ix_assignments_teacher_id ON assignments(teacher_id)",
-            "CREATE INDEX IF NOT EXISTS ix_submissions_assignment_id ON submissions(assignment_id)",
-            "CREATE INDEX IF NOT EXISTS ix_submissions_student_id ON submissions(student_id)",
-            "CREATE INDEX IF NOT EXISTS ix_enrollments_student_course ON enrollments(student_id, course_id)",
-            "CREATE INDEX IF NOT EXISTS ix_assessment_questions_assignment ON assessment_questions(assignment_id)",
-            "CREATE INDEX IF NOT EXISTS ix_assessment_options_question ON assessment_question_options(question_id)",
-            "CREATE INDEX IF NOT EXISTS ix_assessment_rubrics_question ON assessment_question_rubrics(question_id)",
-            "CREATE INDEX IF NOT EXISTS ix_sqa_submission ON student_question_answers(submission_id)",
-            "CREATE INDEX IF NOT EXISTS ix_sqa_student ON student_question_answers(student_id)",
-        ):
-            conn.execute(text(stmt))
-        for stmt in (
-            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS type VARCHAR DEFAULT 'assignment'",
-            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS start_time TIMESTAMP",
-            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS end_time TIMESTAMP",
-            "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS duration_minutes INTEGER",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS section VARCHAR DEFAULT 'Unassigned'",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS evaluator_confidence DOUBLE PRECISION",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) DEFAULT 'auto_finalized'",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_override_marks DOUBLE PRECISION",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS teacher_review_note TEXT",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP",
-            "ALTER TABLE student_question_answers ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
-        ):
-            conn.execute(text(stmt))
+
+    def run_migrations():
+        from alembic import command
+        from alembic.config import Config
+        command.upgrade(Config("alembic.ini"), "head")
+
+    await asyncio.to_thread(run_migrations)
     try:
         mongo_db.resources.create_index("assignment_id")
         mongo_db.resources.create_index("course_id")
@@ -80,11 +56,13 @@ async def startup():
         logger.warning("Optional MongoDB indexes unavailable: %s", exc)
 
 slow_request_ms = float(os.getenv("SLOW_REQUEST_MS", "150"))
+max_upload_mb = max(1, int(os.getenv("MAX_UPLOAD_MB", "10")))
+max_upload_bytes = max_upload_mb * 1024 * 1024
 cors_origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:5173,https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app"
+        "http://localhost:5173,https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app,https://frontend-plum-mu-90.vercel.app,https://frontend-poojasrikandhula-6164s-projects.vercel.app,https://frontend-git-main-poojasrikandhula-6164s-projects.vercel.app"
     ).split(",")
     if origin.strip()
 ]
@@ -146,6 +124,7 @@ app.include_router(quiz_router)
 app.include_router(teacher_insights_router)
 app.include_router(analytics_router)
 app.include_router(exam_router)
+app.include_router(notifications_router)
 
 
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -282,6 +261,29 @@ def create_course(data: CourseCreate, user=Depends(get_user), db: Session = Depe
     db.refresh(course)
     return {"message": "Course created", "id": course.id, "title": course.title}
 
+
+@app.put("/courses/{course_id}")
+def update_course(course_id: int, data: CourseUpdate, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in ["teacher", "admin"]:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+    query = db.query(Course).filter(Course.id == course_id)
+    if user["role"] == "teacher":
+        query = query.filter(Course.teacher_id == user["id"])
+    course = query.first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    title = data.title.strip()
+    description = data.description.strip()
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Course title and description are required")
+    course.title = title
+    course.description = description
+    db.commit()
+    student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
+    notify_users(db, student_ids, "course_update", "Course updated", f"{course.title} was updated.")
+    return {"message": "Course updated", "id": course.id, "title": course.title, "description": course.description}
+
+
 @app.get("/courses")
 def get_courses(page: int = 1, page_size: int = 50, db: Session = Depends(get_db)):
     page = max(page, 1)
@@ -353,16 +355,9 @@ async def create_assignment(
         raise HTTPException(status_code=404, detail="Course not found")
 
     file_data = None
+    file_content = ""
     if file:
-        if file.content_type != "application/pdf":
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        file_data = await file.read()
-        if not file_data:
-            raise HTTPException(status_code=400, detail="Empty PDF file")
-        try:
-            PdfReader(BytesIO(file_data))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid PDF file")
+        file_data, file_content = await read_pdf_upload(file)
 
     assignment = Assignment(
         title=title,
@@ -379,22 +374,23 @@ async def create_assignment(
     db.refresh(assignment)
 
     if file_data:
-        try:
-            reader = PdfReader(BytesIO(file_data))
-            content = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-        except Exception:
-            content = ""
-        mongo_db.resources.insert_one({
-            "course_id": course.id,
-            "assignment_id": assignment.id,
-            "title": file.filename or "Assignment Handout",
-            "filename": file.filename or "handout.pdf",
-            "content_type": "application/pdf",
-            "content": content,
-            "teacher_id": user["id"],
-            "file": file_data,
-            "created_at": datetime.utcnow()
-        })
+        await asyncio.to_thread(
+            mongo_db.resources.insert_one,
+            {
+                "course_id": course.id,
+                "assignment_id": assignment.id,
+                "title": file.filename or "Assignment Handout",
+                "filename": file.filename or "handout.pdf",
+                "content_type": "application/pdf",
+                "content": file_content,
+                "teacher_id": user["id"],
+                "file": file_data,
+                "created_at": datetime.utcnow()
+            }
+        )
+
+    student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
+    notify_users(db, student_ids, "assignment_created", "New assessment", f"{assignment.title} was added to {course.title}.")
 
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
 
@@ -409,6 +405,26 @@ def get_now() -> datetime:
     return datetime.now()
 
 get_utc_now = get_now
+
+def extract_pdf_text(data: bytes) -> str:
+    reader = PdfReader(BytesIO(data))
+    return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+
+
+async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    data = await file.read(max_upload_bytes + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty PDF file")
+    if len(data) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail=f"PDF exceeds the {max_upload_mb} MB upload limit")
+    try:
+        content = await asyncio.to_thread(extract_pdf_text, data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    return data, content
+
 
 def format_iso(dt: datetime | None) -> str | None:
     if dt is None:
@@ -637,15 +653,7 @@ async def submit_assignment(
 
     file_data = None
     if file:
-        if file.content_type != "application/pdf":
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        file_data = await file.read()
-        if not file_data:
-            raise HTTPException(status_code=400, detail="Empty PDF file")
-        try:
-            PdfReader(BytesIO(file_data))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid PDF file")
+        file_data, _ = await read_pdf_upload(file)
 
     if not answer.strip() and not file_data and not answers_json:
         raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
@@ -683,16 +691,20 @@ async def submit_assignment(
         db.refresh(submission)
 
     if file_data:
-        mongo_db.submission_files.insert_one({
-            "submission_id": submission.id,
-            "assignment_id": assignment.id,
-            "student_id": user["id"],
-            "filename": file.filename or "submission.pdf",
-            "content_type": "application/pdf",
-            "file": file_data,
-            "created_at": datetime.utcnow()
-        })
+        await asyncio.to_thread(
+            mongo_db.submission_files.insert_one,
+            {
+                "submission_id": submission.id,
+                "assignment_id": assignment.id,
+                "student_id": user["id"],
+                "filename": file.filename or "submission.pdf",
+                "content_type": "application/pdf",
+                "file": file_data,
+                "created_at": datetime.utcnow()
+            }
+        )
 
+    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
     return {"message": "Submission successful", "id": submission.id, "marks": submission.marks}
 
 def submission_payload(submission, db: Session | None = None):
@@ -826,6 +838,7 @@ def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Sessi
         raise HTTPException(status_code=400, detail="Marks cannot be negative")
     submission.marks = marks
     db.commit()
+    notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.")
     return {"message": "Marks updated", "submission_id": submission.id, "marks": marks}
 
 @app.get("/my-marks")
@@ -844,17 +857,13 @@ async def add_resource(course_id: int, file: UploadFile = File(...), title: str 
         raise HTTPException(status_code=404, detail="Course not found")
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty PDF file")
-
-    try:
-        reader = PdfReader(BytesIO(data))
-        content = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-    except Exception:
-        content = ""
-
-    result = mongo_db.resources.insert_one({"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": content, "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()})
+    data, content = await read_pdf_upload(file)
+    result = await asyncio.to_thread(
+        mongo_db.resources.insert_one,
+        {"course_id": course_id, "title": title, "filename": file.filename, "content_type": file.content_type, "content": content, "teacher_id": user["id"], "file": data, "created_at": datetime.utcnow()}
+    )
+    student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course_id).all()]
+    notify_users(db, student_ids, "course_update", "Course update", f"New learning material was added to {course.title}.")
     return {"message": "PDF uploaded", "id": str(result.inserted_id), "title": title}
 
 @app.get("/my-course-resources")
@@ -996,9 +1005,17 @@ def ai_search(q: str, user=Depends(get_user), db: Session = Depends(get_db)):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
     try:
-        course_ids = None
         if user["role"] == "student":
             course_ids = [e.course_id for e in db.query(Enrollment).filter(Enrollment.student_id == user["id"]).all()]
+        elif user["role"] == "teacher":
+            course_ids = [c.id for c in db.query(Course.id).filter(Course.teacher_id == user["id"]).all()]
+        elif user["role"] == "admin":
+            course_ids = None
+        else:
+            raise HTTPException(status_code=403, detail="Access denied")
         return {"query": q, "results": search_resources(q, course_ids)}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Search service unavailable: {exc}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Search service failed")
+        raise HTTPException(status_code=503, detail="Search service unavailable")

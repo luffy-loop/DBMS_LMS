@@ -7,7 +7,10 @@ DBMS LMS brings student, teacher, and admin workflows into one platform while co
 ## Live Demo
 
 **Frontend:**  
-https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app/
+https://frontend-plum-mu-90.vercel.app/
+
+**Backend:**  
+https://dbms-lms-hwvp.onrender.com
 
 **Repository:**  
 https://github.com/luffy-loop/DBMS_LMS
@@ -90,6 +93,7 @@ PostgreSQL   MongoDB
 - Assignments and tests
 - Submissions
 - Marks
+- Notifications
 
 **MongoDB**
 - Uploaded resources
@@ -140,7 +144,8 @@ Protected endpoints validate the authenticated user's role before allowing acces
 - PyPDF
 
 ### Deployment
-- Vercel
+- Vercel frontend
+- Render Python backend
 
 ## Project Structure
 
@@ -209,7 +214,7 @@ This combination demonstrates polyglot persistence within a single learning plat
 
 The core LMS workflow is implemented and deployed, including authentication, role-based access, courses, enrollment, resources, assignments, timed tests, submissions, grading, marks, AI search, study assistance, quiz generation, and analytics.
 
-The project is still being extended toward a more independently deployable distributed backend architecture.
+The project uses a modular monolithic backend with explicit service/module boundaries and a migration path toward independently deployable services.
 
 ## Known Architecture Gap
 
@@ -244,7 +249,7 @@ uvicorn main:app --reload
 
 Configure the required database, MongoDB, JWT, and AI/vector environment variables before starting the backend.
 
-For a normal run, keep `RUN_DB_SETUP=false` so the application does not perform schema/index setup during startup. For a fresh database or an intentional schema refresh, run once with `RUN_DB_SETUP=true`, then return it to `false`.
+For normal production runs, keep `RUN_DB_SETUP=false`. Schema changes are managed with Alembic. For a fresh local database, `RUN_DB_SETUP=true` runs the non-destructive migration baseline during startup; for an existing database created before Alembic, stamp the baseline once with `alembic stamp 0001_initial` after verifying the schema.
 
 Recommended backend environment variables:
 
@@ -259,6 +264,7 @@ DB_MAX_OVERFLOW=20
 DB_POOL_TIMEOUT=10
 DB_POOL_RECYCLE=1800
 SLOW_REQUEST_MS=150
+MAX_UPLOAD_MB=10
 ```
 
 Production deployments must provide a real `JWT_SECRET`; the development fallback is rejected when `ENVIRONMENT=production`.
@@ -274,6 +280,28 @@ npm run dev
 ```
 
 The frontend communicates with the FastAPI backend through the configured API endpoint.
+
+## Notifications
+
+Notifications are stored in PostgreSQL and delivered through internal service functions so they can later be extracted into an independent service. Implemented events include assignment creation, submission receipt, marks publication, course/resource updates, and admin system notifications. Users can list their own notifications and mark them read.
+
+## Performance Evaluation
+
+A repeatable HTTP benchmark is available at `LMS/backend/tests/performance/benchmark.py`. It reports request count, successes, failures, average latency, p50, p95, error rate, requests/second, concurrency, and duration. Example:
+
+```bash
+python tests/performance/benchmark.py --base-url https://dbms-lms-hwvp.onrender.com --path /health --requests 100 --concurrency 10
+```
+
+Authenticated endpoints can be measured by supplying `--token`. No benchmark numbers are claimed here unless the tool has actually been run against a configured environment.
+
+## Database Migrations
+
+Alembic is included for schema management. `LMS/backend/alembic/versions/0001_initial.py` is a non-destructive baseline that creates missing tables and preserves the existing schema. Existing deployments should be verified and then stamped with `alembic stamp 0001_initial`; future schema changes should be added as incremental revisions. `RUN_DB_SETUP=true` is retained as a compatibility bootstrap for local/reproducible environments.
+
+## Security Evaluation
+
+See `docs/security-evaluation.md` for the implemented security checks and explicit limits on what the project claims.
 
 ## What This Project Demonstrates
 
@@ -300,11 +328,9 @@ Request duration is exposed through the `X-Process-Time` response header, and re
 ## Future Work
 
 - Independently deployable backend services
-- Docker-based local development and deployment
-- Notification service
-- More complete admin management
-- Automated backend and frontend CI
-- Expanded observability and analytics
+- Event-driven architecture when scale justifies it
+- Mobile application
+- Further analytics and horizontal scaling
 
 ## Author
 
@@ -328,7 +354,7 @@ From the repository root:
 docker compose up --build
 ```
 
-The backend connects to the Docker services using `postgres` and `mongodb` service names rather than `localhost`. PostgreSQL remains the source of truth for relational LMS data; MongoDB is used for document-oriented learning resources and uploaded PDF content.
+The backend connects to the Docker services using `postgres` and `mongodb` service names rather than `localhost`. Docker remains optional for development; Render continues using the Python runtime directly. PostgreSQL remains the source of truth for relational LMS data; MongoDB is used for document-oriented learning resources and uploaded PDF content.
 
 For local Compose development, `RUN_DB_SETUP` defaults to `true` so a fresh database can initialize itself. For a persistent production deployment, prefer an explicit migration process and set `RUN_DB_SETUP=false`.
 
@@ -343,7 +369,7 @@ docs/postman/LMS.postman_collection.json
 docs/postman/LMS.postman_environment.json
 ```
 
-The collection covers authentication, courses, assignments, submissions, resources, admin, AI/analytics, and health checks. Login stores the returned JWT in the `access_token` environment variable.
+The collection covers authentication, courses, assignments, submissions, resources, notifications, admin, AI/analytics, and health checks. Use `base_url` for local or set it to the documented Render URL; `production_base_url` is provided as a convenience variable. No real credentials are stored. Login stores the returned JWT in the `access_token` environment variable.
 
 ## Backend Testing
 
@@ -354,7 +380,7 @@ cd LMS/backend
 pytest -q
 ```
 
-The repository also includes a GitHub Actions backend test workflow that installs the backend dependencies and runs the test suite on backend changes.
+The repository also includes a GitHub Actions backend test workflow that compiles the backend and runs the deterministic test suite on backend changes.
 
 ## Production Architecture Notes
 
@@ -364,4 +390,4 @@ The architecture is designed to be horizontally scalable because application sta
 
 Redis is intentionally not mandatory today. It can be introduced later for caching, rate limiting, or background-job coordination without changing the core LMS data model.
 
-The current API paths are preserved for frontend compatibility. A future versioned API can be introduced as a compatibility layer rather than breaking existing clients.
+The current API paths are preserved for frontend compatibility. The deployed frontend production variable `VITE_API_URL` remains `https://dbms-lms-hwvp.onrender.com`. A future versioned API can be introduced as a compatibility layer rather than breaking existing clients.

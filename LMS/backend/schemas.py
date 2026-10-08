@@ -84,3 +84,8 @@ class QuestionReviewItem(BaseModel):
 class TeacherReviewRequest(BaseModel):
     reviews: list[QuestionReviewItem]
 
+
+
+class CourseUpdate(BaseModel):
+    title: str
+    description: str

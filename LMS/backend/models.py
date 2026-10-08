@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, UniqueConstraint, CheckConstraint, Index
 from pgvector.sqlalchemy import Vector
 from database import Base
 
@@ -114,3 +114,17 @@ class StudentQuestionAnswer(Base):
         UniqueConstraint("submission_id", "question_id", name="uq_submission_question"),
     )
 
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    notification_type = Column(String(40), nullable=False)
+    title = Column(String(200), nullable=False)
+    message = Column(String(1000), nullable=False)
+    read_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False)
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "read_at", "created_at"),
+    )
