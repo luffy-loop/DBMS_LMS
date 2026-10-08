@@ -3,7 +3,12 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt
 
-key = os.getenv("JWT_SECRET", "lms-dev-secret-key")
+environment = os.getenv("ENVIRONMENT", "development").lower()
+key = os.getenv("JWT_SECRET")
+if not key:
+    if environment == "production":
+        raise RuntimeError("JWT_SECRET must be configured in production")
+    key = "lms-dev-secret-key"
 alg = "HS256"
 
 security = HTTPBearer(auto_error=False)

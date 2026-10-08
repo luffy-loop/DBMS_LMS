@@ -147,20 +147,20 @@ Protected endpoints validate the authenticated user's role before allowing acces
 ```
 DBMS_LMS/
 ├── LMS/
-│   ├── frontend/
-│   │   └── React + TypeScript application
-│   └── backend/
-│       ├── main.py
-│       ├── models.py
-│       ├── schemas.py
-│       ├── database.py
-│       ├── mongodb.py
-│       ├── auth.py
-│       ├── vector_store.py
-│       ├── learning_insights.py
-│       ├── study_copilot.py
-│       ├── quiz_generator.py
-│       └── teacher_insights.py
+│   ├── backend/
+│   │   ├── main.py
+│   │   ├── models.py
+│   │   ├── schemas.py
+│   │   ├── database.py
+│   │   ├── mongodb.py
+│   │   ├── auth.py
+│   │   ├── vector_store.py
+│   │   ├── learning_insights.py
+│   │   ├── study_copilot.py
+│   │   ├── quiz_generator.py
+│   │   └── teacher_insights.py
+│   └── frontend/
+│       └── React + TypeScript application
 ├── Lab*.sql / Lab*.js
 ├── DBMS LMS1.pptx
 ├── Distributed_Learning_Management_System_with_Scalable_Backend_Architecture.pdf
@@ -244,6 +244,27 @@ uvicorn main:app --reload
 
 Configure the required database, MongoDB, JWT, and AI/vector environment variables before starting the backend.
 
+For a normal run, keep `RUN_DB_SETUP=false` so the application does not perform schema/index setup during startup. For a fresh database or an intentional schema refresh, run once with `RUN_DB_SETUP=true`, then return it to `false`.
+
+Recommended backend environment variables:
+
+```env
+DATABASE_URL=postgresql+psycopg2://...
+JWT_SECRET=replace-with-a-long-random-secret
+ENVIRONMENT=development
+CORS_ORIGINS=http://localhost:5173
+RUN_DB_SETUP=false
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+DB_POOL_TIMEOUT=10
+DB_POOL_RECYCLE=1800
+SLOW_REQUEST_MS=150
+```
+
+Production deployments must provide a real `JWT_SECRET`; the development fallback is rejected when `ENVIRONMENT=production`.
+
+For Vercel, configure `VITE_API_URL` in the Production environment to the public HTTPS FastAPI backend URL. The frontend intentionally fails fast during a production build when this variable is missing instead of silently falling back to localhost. The backend `CORS_ORIGINS` must include the exact Vercel production origin (scheme + host, no path).
+
 ### Frontend
 
 ```bash
@@ -268,6 +289,14 @@ The frontend communicates with the FastAPI backend through the configured API en
 - Deployment and production debugging
 - Designing toward scalable backend architecture
 
+## Backend Scalability Notes
+
+The backend remains a modular monolith rather than being split into microservices prematurely. Database connections use a configurable SQLAlchemy pool, MongoDB uses a bounded connection pool, authentication password verification is moved off the async event loop, and expensive schema/index initialization is opt-in through `RUN_DB_SETUP`.
+
+`GET /health` is a lightweight liveness check. `GET /health/ready` verifies PostgreSQL and MongoDB connectivity for deployment readiness checks.
+
+Request duration is exposed through the `X-Process-Time` response header, and requests above `SLOW_REQUEST_MS` are logged for investigation.
+
 ## Future Work
 
 - Independently deployable backend services
@@ -280,3 +309,59 @@ The frontend communicates with the FastAPI backend through the configured API en
 ## Author
 
 [Poojasri Reddy](https://github.com/luffy-loop)
+
+
+## Docker Development
+
+The repository now includes a reproducible backend stack:
+
+```
+Docker Compose
+├── backend   FastAPI
+├── postgres  PostgreSQL + pgvector
+└── mongodb   MongoDB
+```
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+The backend connects to the Docker services using `postgres` and `mongodb` service names rather than `localhost`. PostgreSQL remains the source of truth for relational LMS data; MongoDB is used for document-oriented learning resources and uploaded PDF content.
+
+For local Compose development, `RUN_DB_SETUP` defaults to `true` so a fresh database can initialize itself. For a persistent production deployment, prefer an explicit migration process and set `RUN_DB_SETUP=false`.
+
+Do not commit a real `.env`. Use environment variables or copy the example configuration and replace every secret.
+
+## API Testing with Postman
+
+A ready-to-import collection is available at:
+
+```
+docs/postman/LMS.postman_collection.json
+docs/postman/LMS.postman_environment.json
+```
+
+The collection covers authentication, courses, assignments, submissions, resources, admin, AI/analytics, and health checks. Login stores the returned JWT in the `access_token` environment variable.
+
+## Backend Testing
+
+Run:
+
+```bash
+cd LMS/backend
+pytest -q
+```
+
+The repository also includes a GitHub Actions backend test workflow that installs the backend dependencies and runs the test suite on backend changes.
+
+## Production Architecture Notes
+
+The backend intentionally remains one deployable modular monolith. The existing FastAPI routers represent functional modules, while PostgreSQL and MongoDB are isolated by workload rather than duplicated.
+
+The architecture is designed to be horizontally scalable because application state is kept in databases and requests do not depend on process-local session state. A load balancer can therefore place multiple backend instances in front of the same PostgreSQL/MongoDB infrastructure.
+
+Redis is intentionally not mandatory today. It can be introduced later for caching, rate limiting, or background-job coordination without changing the core LMS data model.
+
+The current API paths are preserved for frontend compatibility. A future versioned API can be introduced as a compatibility layer rather than breaking existing clients.

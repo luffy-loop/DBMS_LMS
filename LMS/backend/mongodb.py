@@ -12,4 +12,4 @@ client = MongoClient(
     maxPoolSize=int(os.getenv("MONGO_MAX_POOL_SIZE", "20")),
     minPoolSize=int(os.getenv("MONGO_MIN_POOL_SIZE", "1")),
 )
-mongo_db = client["lms_db"]
+mongo_db = client[os.getenv("MONGODB_DATABASE", "lms_db")]

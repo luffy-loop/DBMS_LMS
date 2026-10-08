@@ -2,14 +2,18 @@ import asyncio
 import os
 import time
 import logging
+import json
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pypdf import PdfReader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
+from sqlalchemy.exc import SQLAlchemyError
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
@@ -35,8 +39,11 @@ app = FastAPI(title="LMS")
 async def startup():
     if os.getenv("RUN_DB_SETUP", "false").lower() != "true":
         return
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+    Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         for stmt in (
             "CREATE INDEX IF NOT EXISTS ix_courses_teacher_id ON courses(teacher_id)",
             "CREATE INDEX IF NOT EXISTS ix_assignments_course_id ON assignments(course_id)",
@@ -72,21 +79,63 @@ async def startup():
     except Exception as exc:
         logger.warning("Optional MongoDB indexes unavailable: %s", exc)
 
-Base.metadata.create_all(bind=engine)
+slow_request_ms = float(os.getenv("SLOW_REQUEST_MS", "150"))
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app"
+    ).split(",")
+    if origin.strip()
+]
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.perf_counter()
     response = await call_next(request)
     process_time = time.perf_counter() - start_time
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{process_time * 1000:.2f}ms"
-    if process_time > 0.15:
-        logger.info(f"Slow request: {request.method} {request.url.path} took {process_time*1000:.2f}ms")
+    log_event = {
+        "event": "http_request",
+        "request_id": request_id,
+        "method": request.method,
+        "path": request.url.path,
+        "status": response.status_code,
+        "duration_ms": round(process_time * 1000, 2),
+    }
+    if process_time * 1000 > slow_request_ms:
+        log_event["slow"] = True
+    logger.info(json.dumps(log_event, separators=(",", ":")))
     return response
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Request validation failed", "errors": exc.errors()},
+    )
+
+@app.exception_handler(SQLAlchemyError)
+async def database_exception_handler(request: Request, exc: SQLAlchemyError):
+    logger.exception("Database operation failed")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database service unavailable"},
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled application error")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -109,6 +158,16 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/health/ready")
+def readiness():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        mongo_db.command("ping")
+        return {"status": "ready"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Service dependencies are unavailable")
 
 @app.post("/register")
 async def register(data: Register, db: Session = Depends(get_db)):
@@ -224,8 +283,16 @@ def create_course(data: CourseCreate, user=Depends(get_user), db: Session = Depe
     return {"message": "Course created", "id": course.id, "title": course.title}
 
 @app.get("/courses")
-def get_courses(db: Session = Depends(get_db)):
-    return db.query(Course).all()
+def get_courses(page: int = 1, page_size: int = 50, db: Session = Depends(get_db)):
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    return (
+        db.query(Course)
+        .order_by(Course.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
 
 @app.post("/enroll")
 def enroll(data: EnrollmentCreate, user=Depends(get_user), db: Session = Depends(get_db)):

@@ -1,0 +1,128 @@
+{
+  "info": {
+    "_postman_id": "7e7d5d3e-8e42-4f40-ae74-lms-production",
+    "name": "DBMS LMS API",
+    "description": "Postman collection for the FastAPI LMS backend. Set base_url in the environment before running.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://localhost:8000"},
+    {"key": "access_token", "value": ""},
+    {"key": "user_id", "value": "1"},
+    {"key": "course_id", "value": "1"},
+    {"key": "assignment_id", "value": "1"},
+    {"key": "submission_id", "value": "1"}
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"Test Student\",\n  \"roll_no\": \"POSTMAN001\",\n  \"password\": \"TestPassword123\",\n  \"role\": \"student\",\n  \"section\": \"A\"\n}"},
+            "url": {"raw": "{{base_url}}/register", "host": ["{{base_url}}"], "path": ["register"]}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('register returns success or duplicate', function () {", "  pm.expect([200, 400]).to.include(pm.response.code);", "});"]}}]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"roll_no\": \"POSTMAN001\",\n  \"password\": \"TestPassword123\"\n}"},
+            "url": {"raw": "{{base_url}}/login", "host": ["{{base_url}}"], "path": ["login"]}
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('login succeeds', function () { pm.response.to.have.status(200); });", "const body = pm.response.json();", "pm.environment.set('access_token', body.token);", "pm.environment.set('user_id', body.id);"]}}]
+        },
+        {
+          "name": "Profile",
+          "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/profile", "host": ["{{base_url}}"], "path": ["profile"]}},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('profile succeeds', function () { pm.response.to.have.status(200); });"]}}]
+        }
+      ]
+    },
+    {
+      "name": "Courses",
+      "item": [
+        {
+          "name": "List Courses",
+          "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/courses?page=1&page_size=50", "host": ["{{base_url}}"], "path": ["courses"], "query": [{"key": "page", "value": "1"}, {"key": "page_size", "value": "50"}]}}
+        },
+        {
+          "name": "My Courses",
+          "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/my-courses", "host": ["{{base_url}}"], "path": ["my-courses"]}}
+        },
+        {
+          "name": "Create Course",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"title\": \"Postman Course\",\n  \"description\": \"Course created for API testing\"}"},
+            "url": {"raw": "{{base_url}}/courses", "host": ["{{base_url}}"], "path": ["courses"]}
+          }
+        },
+        {
+          "name": "Enroll",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"course_id\": {{course_id}}\n}"},
+            "url": {"raw": "{{base_url}}/enroll", "host": ["{{base_url}}"], "path": ["enroll"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assignments",
+      "item": [
+        {"name": "My Assignments", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/my-assignments", "host": ["{{base_url}}"], "path": ["my-assignments"]}}},
+        {"name": "Assignments By Course", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/assignments/{{course_id}}", "host": ["{{base_url}}"], "path": ["assignments", "{{course_id}}"]}}},
+        {"name": "My Submissions", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/my-submissions", "host": ["{{base_url}}"], "path": ["my-submissions"]}}},
+        {"name": "My Marks", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/my-marks", "host": ["{{base_url}}"], "path": ["my-marks"]}}}
+      ]
+    },
+    {
+      "name": "Resources",
+      "item": [
+        {"name": "My Course Resources", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/my-course-resources", "host": ["{{base_url}}"], "path": ["my-course-resources"]}}},
+        {"name": "Course Resources", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/courses/{{course_id}}/resources", "host": ["{{base_url}}"], "path": ["courses", "{{course_id}}", "resources"]}}},
+        {"name": "Download Resource", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/resources/{{resource_id}}/download", "host": ["{{base_url}}"], "path": ["resources", "{{resource_id}}", "download"]}}} 
+      ]
+    },
+    {
+      "name": "AI & Analytics",
+      "item": [
+        {"name": "AI Search", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/ai-search?q=database", "host": ["{{base_url}}"], "path": ["ai-search"], "query": [{"key": "q", "value": "database"}]}}},
+        {"name": "Learning Insights", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/learning-insights", "host": ["{{base_url}}"], "path": ["learning-insights"]}}},
+        {"name": "Study Copilot", "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"question\": \"What is normalization?\"\n}"}, "url": {"raw": "{{base_url}}/study-copilot", "host": ["{{base_url}}"], "path": ["study-copilot"]}}},
+        {"name": "Generate Quiz", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/quiz/generate", "host": ["{{base_url}}"], "path": ["quiz", "generate"]}}},
+        {"name": "Course Performance", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/course-performance", "host": ["{{base_url}}"], "path": ["course-performance"]}}},
+        {"name": "Student Progress", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/student-progress", "host": ["{{base_url}}"], "path": ["student-progress"]}}}
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {"name": "Admin Overview", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/admin/overview", "host": ["{{base_url}}"], "path": ["admin", "overview"]}}},
+        {"name": "Admin Users", "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/admin/users", "host": ["{{base_url}}"], "path": ["admin", "users"]}}}
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"]}},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('health is OK', function () { pm.response.to.have.status(200); });", "pm.test('process time header exists', function () { pm.expect(pm.response.headers.has('X-Process-Time')).to.be.true; });"]}}]
+        },
+        {
+          "name": "Readiness",
+          "request": {"method": "GET", "header": [], "url": {"raw": "{{base_url}}/health/ready", "host": ["{{base_url}}"], "path": ["health", "ready"]}}
+        }
+      ]
+    }
+  ]
+}

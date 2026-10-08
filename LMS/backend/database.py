@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 url = os.getenv("DATABASE_URL")
+environment = os.getenv("ENVIRONMENT", "development").lower()
 if not url:
+    if environment == "production":
+        raise RuntimeError("DATABASE_URL must be configured in production")
     url = "postgresql+psycopg2://admin@localhost:5432/postgres"
 elif url.startswith("postgresql://"):
     url = url.replace("postgresql://", "postgresql+psycopg2://", 1)

@@ -12,4 +12,4 @@ sentence-transformers>=5.1,<6.1
 pypdf
 python-multipart
 pgvector
-
+pytest
