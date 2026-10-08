@@ -1,5 +1,5 @@
 import {useEffect,useState} from "react"
-import {Route,Target,ArrowRight,Sparkles} from "lucide-react"
+import {Route,Target,Sparkles} from "lucide-react"
 import {useNavigate} from "react-router-dom"
 import AppLayout from "../components/AppLayout"
 import {apiJson} from "../api"

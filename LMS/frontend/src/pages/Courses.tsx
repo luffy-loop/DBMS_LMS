@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { BookOpen, Check, Download, FileText, Image, Presentation, Table2, File, RefreshCw } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
-import { apiJson, ApiError } from "../api"
+import { apiFetch, apiJson, ApiError } from "../api"
 
 type Course={id:number;title:string;description:string;teacher_id:number}
 type Resource={id:string;title:string;filename:string;content_type:string;size:number;processing_status:string;extraction_status:string;indexing_status:string;error_message?:string|null;page_count?:number;slide_count?:number;ocr_status?:string}
@@ -35,7 +35,8 @@ export default function Courses(){
  }
  async function openResource(id:string){
   try{
-   const {response}=await import("../api").then(m=>m.apiFetch("/resources/"+id+"/download",{},30000))
+   const response=await apiFetch("/resources/"+id+"/download",{},30000)
+   if(!response.ok) throw new ApiError(response.status,"Unable to download material")
    const blob=await response.blob();const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener,noreferrer");window.setTimeout(()=>URL.revokeObjectURL(url),60000)
   }catch(e){setError(e instanceof ApiError?e.message:"Unable to open material")}
  }

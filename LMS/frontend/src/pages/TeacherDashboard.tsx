@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
-import { BookOpen, Plus, Upload, X, CheckCircle2, AlertCircle, Loader2, RefreshCw, FileText, Image, Presentation, Table2, File, GripVertical } from "lucide-react"
+import { BookOpen, Plus, Upload, X, Loader2, FileText, Image, Presentation, Table2, File, GripVertical } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
 import { apiJson, uploadFile, ApiError } from "../api"
 
 type Course = { id:number; title:string; description:string; teacher_id:number }
 type Overview = { courses:number; assessments:number; course_pdfs:number; submissions:number; pending_grading:number }
-type Resource = { id:string; title:string; filename:string; size:number; processing_status:string; extraction_status:string; indexing_status:string; error_message?:string|null; page_count?:number; slide_count?:number; ocr_status?:string }
-
 const ACCEPT = ".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.png,.jpg,.jpeg,.webp,.csv,.xlsx"
 const MAX_FILES = 20
 
