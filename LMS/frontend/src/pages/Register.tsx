@@ -55,11 +55,11 @@ export default function Register() {
 
         <form onSubmit={register} className="rounded-3xl border border-white/10 bg-white/[0.035] p-8 backdrop-blur-xl">
           <div className="space-y-5">
-            <Field label="Full Name"><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Enter your name" required className="lms-input" /></Field>
-            <Field label="College Roll Number"><input type="text" value={rollNo} onChange={e => setRollNo(e.target.value)} placeholder="Enter your college roll number" required className="lms-input" /></Field>
-            <Field label="Password"><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Create a password" required className="lms-input" /></Field>
+            <Field label="Full Name"><input id="register-name" type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Enter your name" required className="lms-input" /></Field>
+            <Field label="College Roll Number"><input id="register-roll-no" type="text" value={rollNo} onChange={e => setRollNo(e.target.value)} placeholder="Enter your college roll number" required className="lms-input" /></Field>
+            <Field label="Password"><input id="register-password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Create a password" required className="lms-input" /></Field>
             <Field label="Role">
-              <select value={role} onChange={e => setRole(e.target.value)} className="lms-input">
+              <label htmlFor="register-role" className="sr-only">Role</label><select id="register-role" value={role} onChange={e => setRole(e.target.value)} className="lms-input">
                 <option value="student">Student</option><option value="teacher">Teacher</option><option value="admin">Admin</option>
               </select>
             </Field>

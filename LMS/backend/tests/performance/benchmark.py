@@ -8,14 +8,17 @@ import urllib.error
 import urllib.request
 
 
-def request_once(base_url, path, token, timeout):
+def request_once(base_url, path, method, body, token, timeout):
     url = base_url.rstrip("/") + path
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    data = body.encode() if body is not None else None
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     started = time.perf_counter()
     try:
-        request = urllib.request.Request(url, headers=headers)
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             response.read()
             status = response.status
@@ -42,20 +45,20 @@ def main():
     parser = argparse.ArgumentParser(description="Repeatable LMS HTTP performance benchmark")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--path", action="append", required=True)
+    parser.add_argument("--method", default="GET", choices=["GET", "POST", "PUT", "PATCH"])
+    parser.add_argument("--body", default=None)
     parser.add_argument("--requests", type=int, default=100)
     parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--token", default="")
     args = parser.parse_args()
-
     if args.requests < 1 or args.concurrency < 1:
         parser.error("--requests and --concurrency must be positive")
 
     started = time.perf_counter()
-    paths = args.path
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [
-            pool.submit(request_once, args.base_url, paths[i % len(paths)], args.token, args.timeout)
+            pool.submit(request_once, args.base_url, args.path[i % len(args.path)], args.method, args.body, args.token, args.timeout)
             for i in range(args.requests)
         ]
         results = [future.result() for future in concurrent.futures.as_completed(futures)]
@@ -63,21 +66,23 @@ def main():
     latencies = [latency for _, latency in results]
     successful = sum(200 <= status < 400 for status, _ in results)
     failed = len(results) - successful
-    report = {
+    print(json.dumps({
         "base_url": args.base_url,
-        "endpoints": paths,
+        "endpoints": args.path,
+        "method": args.method,
         "requests": len(results),
         "successful": successful,
         "failed": failed,
         "error_rate_percent": round((failed / len(results)) * 100, 2),
         "average_latency_ms": round(statistics.mean(latencies), 2) if latencies else None,
+        "min_latency_ms": round(min(latencies), 2) if latencies else None,
+        "max_latency_ms": round(max(latencies), 2) if latencies else None,
         "p50_latency_ms": percentile(latencies, 50),
         "p95_latency_ms": percentile(latencies, 95),
         "requests_per_second": round(len(results) / elapsed, 2) if elapsed else None,
         "concurrency": args.concurrency,
         "duration_seconds": round(elapsed, 3),
-    }
-    print(json.dumps(report, indent=2))
+    }, indent=2))
 
 
 if __name__ == "__main__":
