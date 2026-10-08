@@ -249,7 +249,7 @@ uvicorn main:app --reload
 
 Configure the required database, MongoDB, JWT, and AI/vector environment variables before starting the backend.
 
-For normal production runs, keep `RUN_DB_SETUP=false`. Schema changes are managed with Alembic. For a fresh local database, `RUN_DB_SETUP=true` runs the non-destructive migration baseline during startup; for an existing database created before Alembic, stamp the baseline once with `alembic stamp 0001_initial` after verifying the schema.
+For production, keep `RUN_DB_SETUP=true` unless migrations are handled by a separate release step. The backend runs the non-destructive Alembic migrations during startup before serving requests. Schema changes are managed with Alembic. For a fresh local database, `RUN_DB_SETUP=true` runs the non-destructive migration baseline during startup; for an existing database created before Alembic, stamp the baseline once with `alembic stamp 0001_initial` after verifying the schema.
 
 Recommended backend environment variables:
 
@@ -259,8 +259,9 @@ JWT_SECRET=replace-with-a-long-random-secret
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:5173
 RUN_DB_SETUP=false
-DB_POOL_SIZE=10
-DB_MAX_OVERFLOW=20
+DB_POOL_SIZE=3
+DB_MAX_OVERFLOW=2
+DB_CONNECT_TIMEOUT=5
 DB_POOL_TIMEOUT=10
 DB_POOL_RECYCLE=1800
 SLOW_REQUEST_MS=150

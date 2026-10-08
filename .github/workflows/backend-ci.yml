@@ -48,6 +48,8 @@ jobs:
         run: npm ci
       - name: Run accessibility lint
         run: npm run a11y:lint
+      - name: Verify frontend product contract
+        run: npm run verify:contract
       - name: Build frontend
         env:
           VITE_API_URL: https://dbms-lms-hwvp.onrender.com

@@ -24,7 +24,6 @@ from auth import get_user, key, alg
 from mongodb import mongo_db
 from notifications import router as notifications_router
 from notification_service import notify_users
-from vector_store import search_resources_detailed
 from learning_insights import router as learning_router
 from study_copilot import router as copilot_router
 from quiz_generator import router as quiz_router
@@ -41,7 +40,11 @@ app = FastAPI(title="LMS")
 
 @app.on_event("startup")
 async def startup():
-    if os.getenv("RUN_DB_SETUP", "false").lower() != "true":
+    run_db_setup = os.getenv(
+        "RUN_DB_SETUP",
+        "true" if os.getenv("ENVIRONMENT", "development").lower() == "production" or os.getenv("RENDER_GIT_COMMIT") else "false",
+    ).lower() == "true"
+    if not run_db_setup:
         return
 
     def run_migrations():
@@ -102,9 +105,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(SQLAlchemyError)
 async def database_exception_handler(request: Request, exc: SQLAlchemyError):
     logger.exception("Database operation failed")
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
     return JSONResponse(
         status_code=503,
-        content={"detail": "Database service unavailable"},
+        content={
+            "detail": {
+                "error": "DATABASE_UNAVAILABLE",
+                "message": "The LMS database is temporarily unavailable. Please retry.",
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id},
     )
 
 @app.exception_handler(Exception)
@@ -145,13 +156,21 @@ def health():
 
 @app.get("/health/ready")
 def readiness():
+    checks = {"postgres": False, "mongodb": False}
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        mongo_db.command("ping")
-        return {"status": "ready"}
+        checks["postgres"] = True
     except Exception:
-        raise HTTPException(status_code=503, detail="Service dependencies are unavailable")
+        pass
+    try:
+        mongo_db.command("ping")
+        checks["mongodb"] = True
+    except Exception:
+        pass
+    if not all(checks.values()):
+        raise HTTPException(status_code=503, detail={"error": "DEPENDENCIES_UNAVAILABLE", "checks": checks})
+    return {"status": "ready", "checks": checks}
 
 @app.post("/register")
 async def register(data: Register, db: Session = Depends(get_db)):
@@ -1010,6 +1029,7 @@ async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):
         elif user["role"]=="admin": course_ids=None
         else: raise HTTPException(status_code=403,detail="Access denied")
         started=time.perf_counter()
+        from vector_store import search_resources_detailed
         results,metrics=await asyncio.wait_for(asyncio.to_thread(search_resources_detailed,q,course_ids),timeout=15)
         metrics["total_ms"]=round((time.perf_counter()-started)*1000,2)
         return {"query":q,"results":results,"metrics":metrics}

@@ -8,15 +8,15 @@ from sqlalchemy.orm import Session
 
 from auth import get_user
 from database import get_db
-from vector_store import search_resources_detailed
 from study_knowledge import find_knowledge
-from models import Enrollment
+from models import Course, Enrollment
 
 router = APIRouter(tags=["study"])
 
 
 class CopilotRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1200)
+    course_id: int | None = Field(default=None, gt=0)
 
 
 class NotesRequest(BaseModel):
@@ -26,6 +26,21 @@ class NotesRequest(BaseModel):
 def _course_ids(user_id, db: Session):
     return [e[0] for e in db.query(Enrollment.course_id).filter(Enrollment.student_id == user_id).all()]
 
+
+
+def _authorized_course_ids(user, db: Session, course_id: int | None):
+    if course_id is None:
+        return None
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if user["role"] == "student":
+        enrolled = db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == course_id).first()
+        if not enrolled:
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+    elif user["role"] == "teacher" and course.teacher_id != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only use your own course")
+    return [course_id]
 
 def _sentence_parts(text):
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if len(s.split()) >= 6]
@@ -60,14 +75,14 @@ def build_answer(question, results):
         return {
             "answer": knowledge["answer"],
             "confidence": "high",
-            "mode": "study knowledge",
-            "sources": [{"title": knowledge["topic"], "type": "core concept", "course_id": 0, "distance": 0}],
+            "mode": "general study knowledge" if not results else "study knowledge + course context",
+            "sources": [{"title": knowledge["topic"], "type": "general study knowledge", "course_id": 0, "distance": 0}] + [{"title": r["title"], "type": r["type"], "course_id": r["course_id"], "distance": r["distance"]} for r in results[:3]],
         }
     if not results:
         return {
-            "answer": "I could not find that topic in your authorized course material yet. Try a topic from your course resources or upload the relevant notes first.",
+            "answer": "I can help with general academic questions, explanations, examples and step-by-step problem solving. This deployment does not have a general-purpose model provider configured for unknown topics yet. Try rephrasing the question or use a supported study topic.",
             "confidence": "low",
-            "mode": "course materials",
+            "mode": "general study assistant",
             "sources": [],
         }
     answer, useful = _retrieval_answer(question, results)
@@ -80,6 +95,7 @@ def build_answer(question, results):
 
 
 async def _search(question, course_ids):
+    from vector_store import search_resources_detailed
     return await asyncio.to_thread(search_resources_detailed, question, course_ids)
 
 
@@ -89,22 +105,24 @@ async def study_copilot(data: CopilotRequest, user=Depends(get_user), db: Sessio
         raise HTTPException(status_code=403, detail="Access denied")
     question = data.question.strip()
     if not question:
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
+        raise HTTPException(status_code=400, detail={"error": "VALIDATION_ERROR", "message": "Question cannot be empty"})
     try:
-        course_ids = _course_ids(user["id"], db) if user["role"] == "student" else None
+        course_ids = _authorized_course_ids(user, db, data.course_id)
         started = time.perf_counter()
-        results, metrics = await asyncio.wait_for(_search(question, course_ids), timeout=20)
+        results = []
+        metrics = {"embedding_ms": 0.0, "vector_search_ms": 0.0, "context_build_ms": 0.0, "llm_ms": 0.0}
+        if course_ids:
+            results, metrics = await asyncio.wait_for(_search(question, course_ids), timeout=12)
         answer = build_answer(question, results)
         metrics["context_build_ms"] = round((time.perf_counter() - started) * 1000 - metrics["embedding_ms"] - metrics["vector_search_ms"], 2)
-        metrics["llm_ms"] = 0
         metrics["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
-        return {"question": question, **answer, "metrics": metrics}
+        return {"question": question, "course_id": data.course_id, **answer, "metrics": metrics}
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail={"error": "AI_TIMEOUT", "message": "Study Copilot took too long. Please retry."})
+        raise HTTPException(status_code=504, detail={"error": "AI_TIMEOUT", "message": "The AI request took too long. Please retry."})
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=503, detail={"error": "AI_UNAVAILABLE", "message": "Study Copilot is temporarily unavailable."})
+        raise HTTPException(status_code=503, detail={"error": "AI_UNAVAILABLE", "message": "The study assistant is temporarily unavailable."})
 
 
 @router.post("/study-notes")
@@ -116,7 +134,7 @@ async def study_notes(data: NotesRequest, user=Depends(get_user), db: Session = 
     if knowledge:
         return {"topic": knowledge["topic"], "summary": knowledge["answer"], "bullets": knowledge["bullets"], "key_terms": knowledge["terms"], "exam_tip": knowledge["tip"], "mode": "study knowledge", "sources": [{"title": knowledge["topic"], "type": "core concept", "course_id": 0}]}
     try:
-        results, _ = await asyncio.wait_for(_search(topic, _course_ids(user["id"], db) if user["role"] == "student" else None), timeout=20)
+        results, _ = await asyncio.wait_for(_search(topic, _course_ids(user["id"], db) if user["role"] == "student" else None), timeout=12)
         if not results:
             raise HTTPException(status_code=404, detail="No matching course material found for this topic")
         sentences = []

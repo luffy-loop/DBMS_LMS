@@ -12,7 +12,7 @@ Repeated searches are cached in-process for a short TTL. Cache keys include the 
 
 Server timing fields include embedding_ms, vector_search_ms, context_build_ms, llm_ms and total_ms.
 
-The current Study Copilot implementation is retrieval-based and does not call an external LLM provider. Therefore llm_ms is zero; the application must not claim external model generation where none exists.
+The Study Copilot is a general study assistant. It can answer supported general academic topics without course selection. A course may be selected as optional authorized context. The current deployment uses the local study-knowledge and retrieval modules rather than an external LLM provider, so llm_ms remains zero.
 
 ## Study Copilot
 
@@ -22,7 +22,7 @@ Cancellation stops the browser wait. The backend timeout returns a structured AI
 
 ## Quiz generation
 
-POST /quiz/generate creates a database-backed job and returns a job_id.
+POST /study-copilot accepts a question and optional course_id. No course is required for general study questions. If course_id is supplied, the backend validates enrollment or ownership before retrieval.\n\nPOST /quiz/generate creates a database-backed job and returns a job_id.
 
 Statuses:
 

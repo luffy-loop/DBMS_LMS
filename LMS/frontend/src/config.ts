@@ -1,8 +1,5 @@
 const configuredApi = import.meta.env.VITE_API_URL?.trim()
-
-if (!configuredApi && import.meta.env.PROD) {
-  throw new Error("VITE_API_URL must be configured for production deployments")
-}
-
+const productionApi = "https://dbms-lms-hwvp.onrender.com"
 const localApi = "http://127.0.0.1:8000"
-export const API = (configuredApi || localApi).replace(/\/$/, "")
+
+export const API = (import.meta.env.PROD ? productionApi : (configuredApi || localApi)).replace(/\/$/, "")
