@@ -518,7 +518,7 @@ def evaluate_and_record_exam(
                 rubrics = rubrics_by_qid.get(q.id, [])
 
                 if not clean_ans or len(clean_ans.split()) < 2:
-                    # Unanswered or empty descriptive response -> 0 marks
+                    manual_review_required = bool(ans_data.get("manual_review_required"))
                     empty_eval = {
                         "evaluator_version": "hybrid-v2-nli",
                         "embedding_model": "all-MiniLM-L6-v2",
@@ -527,8 +527,9 @@ def evaluate_and_record_exam(
                         "overall_correctness": 0.0,
                         "contradiction_detected": False,
                         "contradiction_details": [],
-                        "evaluator_confidence": 0.99,
-                        "review_status": "auto_finalized",
+                        "evaluator_confidence": 0.0 if manual_review_required else 0.99,
+                        "review_status": "needs_review" if manual_review_required else "auto_finalized",
+                        "feedback": "PDF text could not be extracted reliably. Please review the uploaded file manually." if manual_review_required else "No substantive answer was provided.",
                         "criteria": []
                     }
                     sqa = StudentQuestionAnswer(
@@ -542,11 +543,11 @@ def evaluate_and_record_exam(
                         similarity_score=0.0,
                         awarded_marks=0.0,
                         max_marks=q.max_marks,
-                        evaluation_status="unanswered" if not clean_ans else "evaluated",
+                        evaluation_status="evaluation_failed" if manual_review_required else ("unanswered" if not clean_ans else "evaluated"),
                         evaluated_at=now,
                         evaluator_version="hybrid-v2-nli",
-                        evaluator_confidence=0.99,
-                        review_status="auto_finalized",
+                        evaluator_confidence=0.0 if manual_review_required else 0.99,
+                        review_status="needs_review" if manual_review_required else "auto_finalized",
                         rubric_evaluation=json.dumps(empty_eval)
                     )
                     db.add(sqa)

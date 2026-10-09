@@ -454,6 +454,9 @@ async def create_assignment(
     start_time: datetime | None = Form(None),
     end_time: datetime | None = Form(None),
     duration_minutes: int | None = Form(None),
+    reference_answer: str = Form(""),
+    max_marks: int = Form(10),
+    marking_criteria: str = Form(""),
     file: UploadFile | None = File(None),
     user=Depends(get_user),
     db: Session = Depends(get_db)
@@ -468,6 +471,17 @@ async def create_assignment(
         raise HTTPException(status_code=400, detail="Duration must be greater than zero")
     if duration_minutes is not None and not start_time:
         raise HTTPException(status_code=400, detail="Start time is required when duration is set")
+
+    reference_answer = (reference_answer or "").strip()
+    criteria = [line.strip() for line in (marking_criteria or "").splitlines() if line.strip()]
+    if reference_answer and (max_marks < 1 or max_marks > 100):
+        raise HTTPException(status_code=400, detail="AI-assisted correction maximum marks must be between 1 and 100")
+    if len(reference_answer) > 10000:
+        raise HTTPException(status_code=400, detail="Reference answer must be 10,000 characters or fewer")
+    if len(criteria) > 20 or any(len(line) > 300 for line in criteria):
+        raise HTTPException(status_code=400, detail="Provide at most 20 marking criteria, each no longer than 300 characters")
+    if criteria and not reference_answer:
+        raise HTTPException(status_code=400, detail="Add a reference answer before adding marking criteria")
 
     course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
     if not course:
@@ -489,6 +503,31 @@ async def create_assignment(
         duration_minutes=duration_minutes
     )
     db.add(assignment)
+    db.flush()
+
+    ai_question_id = None
+    if reference_answer:
+        from models import AssessmentQuestion, AssessmentQuestionRubric
+        ai_question = AssessmentQuestion(
+            assignment_id=assignment.id,
+            question_text=description.strip() or title.strip(),
+            question_type="descriptive",
+            max_marks=max_marks,
+            order_index=0,
+            reference_answer=reference_answer,
+        )
+        db.add(ai_question)
+        db.flush()
+        ai_question_id = ai_question.id
+        if criteria:
+            criterion_marks = float(max_marks) / len(criteria)
+            for idx, criterion in enumerate(criteria):
+                db.add(AssessmentQuestionRubric(
+                    question_id=ai_question.id,
+                    criterion_text=criterion,
+                    max_marks=criterion_marks,
+                    order_index=idx,
+                ))
     db.commit()
     db.refresh(assignment)
 
@@ -512,7 +551,7 @@ async def create_assignment(
     notify_users(db, student_ids, "assignment_created", f"New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
     record_audit(db, user["id"], "assignment_created", "assignment", assignment.id, {"course_id": course.id, "type": type})
 
-    return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
+    return {"message": "Assessment created", "id": assignment.id, "title": assignment.title, "ai_grading_enabled": bool(ai_question_id), "ai_question_id": ai_question_id}
 
 def normalize_datetime(dt: datetime | None) -> datetime | None:
     if dt is None:
@@ -787,13 +826,16 @@ async def submit_assignment(
 
     file_data = None
     if file:
-        file_data, _ = await read_pdf_upload(file)
+        file_data, file_content = await read_pdf_upload(file)
 
     if not answer.strip() and not file_data and not answers_json:
         raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
 
     from models import AssessmentQuestion
-    has_questions = db.query(AssessmentQuestion).filter(AssessmentQuestion.assignment_id == assignment.id).first() is not None
+    assessment_questions = db.query(AssessmentQuestion).filter(
+        AssessmentQuestion.assignment_id == assignment.id
+    ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
+    has_questions = bool(assessment_questions)
 
     if answers_json or has_questions:
         import json
@@ -810,6 +852,23 @@ async def submit_assignment(
             }
             for item in answers_list if isinstance(item, dict) and item.get("question_id")
         }
+
+        # For a teacher-configured single short-answer question, use the student's
+        # text answer or readable PDF text when the question-specific field is blank.
+        # If PDF text extraction yielded no usable text, require human review instead.
+        if len(assessment_questions) == 1 and assessment_questions[0].question_type == "descriptive":
+            question = assessment_questions[0]
+            current = answers_map.get(question.id, {})
+            current_answer = (current.get("student_answer") or "").strip()
+            if not current_answer:
+                if answer.strip():
+                    current["student_answer"] = answer.strip()
+                elif file_data and len((file_content or "").split()) >= 2:
+                    current["student_answer"] = file_content.strip()
+                elif file_data:
+                    current["manual_review_required"] = True
+                answers_map[question.id] = current
+
         try:
             submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
         except HTTPException as exc:
