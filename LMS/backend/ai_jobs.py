@@ -58,15 +58,22 @@ def run_quiz_job(job_id):
         if not results: raise ValueError("No indexed learning material is ready for this course")
         set_job(db,job,"GENERATING")
         questions=_generate_grounded_questions(results,int(payload.get("question_count",5)))
-        if not questions: raise ValueError("Not enough grounded material to generate a quiz")
+        if not questions: raise ValueError("Not enough distinct statements were found in processed course material to draft a quiz. Upload or process more course material.")
         set_job(db,job,"COMPLETED",{"title":"Course Revision Quiz","course_id":job.course_id,"questions":questions,"metrics":metrics})
     except TimeoutError:
         job=db.query(AIJob).filter(AIJob.id==job_id).first()
         if job and job.status!="CANCELLED": set_job(db,job,"FAILED",error={"error":"AI_TIMEOUT","message":"Quiz generation took too long. Please retry."})
     except Exception as exc:
-        logger.exception("AI quiz job failed")
+        logger.warning("AI quiz job failed job_id=%s error_type=%s", job_id, type(exc).__name__)
         job=db.query(AIJob).filter(AIJob.id==job_id).first()
-        if job and job.status!="CANCELLED": set_job(db,job,"FAILED",error={"error":"AI_GENERATION_FAILED","message":str(exc)[:500]})
+        if job and job.status!="CANCELLED":
+            safe_messages = {
+                "No processed course material is available. Upload a PDF or other supported material and wait until processing finishes.": "NO_COURSE_MATERIAL",
+                "Not enough distinct statements were found in processed course material to draft a quiz. Upload or process more course material.": "INSUFFICIENT_MATERIAL",
+            }
+            message = str(exc) if str(exc) in safe_messages else "Quiz retrieval or generation failed. Check that course material is processed and the database is reachable."
+            code = safe_messages.get(str(exc), "AI_GENERATION_FAILED")
+            set_job(db,job,"FAILED",error={"error":code,"message":message[:300]})
     finally:
         db.close()
 
@@ -76,19 +83,19 @@ def _generate_grounded_questions(results,count):
     count=max(1,min(10,count))
     clean=[];seen=set()
     for result in results:
-        sentences=[x.strip() for x in re.split(r"(?<=[.!?])\s+",result.get("content","")) if len(x.split())>=8]
+        title=" ".join(str(result.get("title") or "Course material").split())
+        sentences=[x.strip() for x in re.split(r"(?<=[.!?])\s+",str(result.get("content") or "")) if len(x.split())>=8]
         for sentence in sentences:
+            sentence=sentence[:700].strip()
             key=sentence.lower()
             if key not in seen:
-                clean.append((result.get("title","Course material"),sentence));seen.add(key)
+                clean.append((title,sentence));seen.add(key)
             if len(clean)>=count: break
         if len(clean)>=count: break
-    if not clean:return []
-    titles=list(dict.fromkeys(title for title,_ in clean))
+    if len(clean)<2:return []
     questions=[]
+    option_count=min(4,len(clean))
     for i,(title,sentence) in enumerate(clean[:count],1):
-        options=list(dict.fromkeys([title]+titles))
-        while len(options)<4: options.append("Course material "+str(len(options)+1))
-        options=options[:4]
-        questions.append({"id":i,"question":"Which course material contains the following concept?","context":sentence[:700],"options":options,"answer":title,"source":title,"question_type":"mcq","max_marks":1,"explanation":"The correct option is the learning material from which this passage was retrieved."})
+        options=[clean[(i-1+j)%len(clean)][1] for j in range(option_count)]
+        questions.append({"id":i,"question":"Which statement is supported by the selected course material?","context":sentence,"options":options,"answer":sentence,"source":title,"question_type":"mcq","max_marks":1,"explanation":"This statement is quoted from processed course material."})
     return questions

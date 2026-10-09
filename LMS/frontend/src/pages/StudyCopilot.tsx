@@ -20,7 +20,7 @@ export default function StudyCopilot(){
   const controller=useRef<AbortController|null>(null)
 
   useEffect(()=>{
-    if(!localStorage.getItem("token")){navigate("/login");return}
+    if(!sessionStorage.getItem("token")){navigate("/login");return}
     apiJson<Course[]>("/my-courses",{},10000).then(setCourses).catch(()=>setCourses([]))
     return()=>controller.current?.abort()
   },[navigate])

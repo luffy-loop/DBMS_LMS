@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, UniqueConstraint, CheckConstraint, Index
 from pgvector.sqlalchemy import Vector
 from database import Base
@@ -48,6 +49,7 @@ class Submission(Base):
     student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     answer = Column(String, nullable=False)
     marks = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=True, default=datetime.utcnow)
     __table_args__ = (UniqueConstraint("assignment_id", "student_id", name="uq_submission_assignment_student"),)
 
 class AssessmentQuestion(Base):

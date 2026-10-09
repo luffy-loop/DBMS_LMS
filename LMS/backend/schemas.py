@@ -1,5 +1,6 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 
 class Register(BaseModel):
     name: str
@@ -89,3 +90,15 @@ class TeacherReviewRequest(BaseModel):
 class CourseUpdate(BaseModel):
     title: str
     description: str
+
+
+class AdminUserCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    roll_no: str = Field(min_length=3, max_length=100)
+    password: str = Field(min_length=8, max_length=128)
+    role: Literal["student", "teacher"]
+    section: str = Field(default="Unassigned", min_length=1, max_length=40)
+
+
+class AdminRoleUpdate(BaseModel):
+    role: Literal["student", "teacher", "admin"]

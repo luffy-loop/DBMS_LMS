@@ -9,7 +9,7 @@ type Resource={id:string;title:string;filename:string;content_type:string;size:n
 
 export default function Courses(){
  const navigate=useNavigate()
- const role=localStorage.getItem("role")||"student"
+ const role=sessionStorage.getItem("role")||"student"
  const [courses,setCourses]=useState<Course[]>([])
  const [mine,setMine]=useState<Course[]>([])
  const [res,setRes]=useState<Record<number,Resource[]>>({})
@@ -21,14 +21,14 @@ export default function Courses(){
   try{
    const all=await apiJson<Course[]>("/courses?page=1&page_size=100")
    setCourses(all)
-   const own=role==="student"?await apiJson<Course[]>("/my-courses"):all.filter(c=>c.teacher_id===Number(localStorage.getItem("userId")))
+   const own=role==="student"?await apiJson<Course[]>("/my-courses"):role==="admin"?all:all.filter(c=>c.teacher_id===Number(sessionStorage.getItem("userId")))
    setMine(own)
    const data=await apiJson<Record<number,Resource[]>>("/my-course-resources")
    setRes(data)
   }catch(e){setError(e instanceof Error?e.message:"Failed to load courses")}
   finally{setLoading(false)}
  }
- useEffect(()=>{if(!localStorage.getItem("token")){navigate("/login");return}load()},[navigate])
+ useEffect(()=>{if(!sessionStorage.getItem("token")){navigate("/login");return}load()},[navigate])
 
  async function enroll(id:number){
   try{await apiJson("/enroll",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:id})});await load()}catch(e){setError(e instanceof Error?e.message:"Enrollment failed")}

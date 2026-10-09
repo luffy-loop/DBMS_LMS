@@ -7,7 +7,6 @@ export default function Register() {
   const [name, setName] = useState("")
   const [rollNo, setRollNo] = useState("")
   const [password, setPassword] = useState("")
-  const [role, setRole] = useState("student")
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
@@ -23,7 +22,7 @@ export default function Register() {
       const res = await fetch(`${API}/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, roll_no: rollNo, password, role }),
+        body: JSON.stringify({ name, roll_no: rollNo, password, role: "student" }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || "Registration failed")
@@ -32,7 +31,6 @@ export default function Register() {
       setName("")
       setRollNo("")
       setPassword("")
-      setRole("student")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed")
     } finally {
@@ -58,12 +56,8 @@ export default function Register() {
             <Field label="Full Name"><input id="register-name" type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Enter your name" required className="lms-input" /></Field>
             <Field label="College Roll Number"><input id="register-roll-no" type="text" value={rollNo} onChange={e => setRollNo(e.target.value)} placeholder="Enter your college roll number" required className="lms-input" /></Field>
             <Field label="Password"><input id="register-password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Create a password" required className="lms-input" /></Field>
-            <Field label="Role">
-              <label htmlFor="register-role" className="sr-only">Role</label><select id="register-role" value={role} onChange={e => setRole(e.target.value)} className="lms-input">
-                <option value="student">Student</option><option value="teacher">Teacher</option><option value="admin">Admin</option>
-              </select>
-            </Field>
-            {role !== "admin" && (
+            <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/5 px-4 py-3 text-sm"><p className="text-cyan-200">New public accounts are student accounts.</p><p className="mt-1 text-xs text-white/35">Teacher accounts are created by an administrator.</p></div>
+            {true && (
               <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/5 px-4 py-3 text-sm">
                 <p className="text-cyan-200">Section will be assigned by Admin</p>
                 <p className="mt-1 text-xs text-white/35">You cannot select or change your section during registration.</p>

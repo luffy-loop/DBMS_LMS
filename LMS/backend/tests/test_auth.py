@@ -50,10 +50,21 @@ def test_expired_token_is_rejected():
         assert exc.status_code == 401
 
 
-def test_valid_token_returns_claims():
-    token = jwt.encode({"id": 7, "role": "student"}, key, algorithm=alg)
+def test_valid_token_returns_current_database_role():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    User.__table__.create(engine)
+    db = TestingSession()
+    db.add(User(id=7, name="Test", email="TEST007", password=pwd.hash("password"), role="student", section="A1"))
+    db.commit()
+    token = jwt.encode({"id": 7, "role": "admin"}, key, algorithm=alg)
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-    assert get_user(creds) == {"id": 7, "role": "student"}
+    try:
+        assert get_user(creds, db) == {"id": 7, "role": "student"}
+    finally:
+        db.close()
+        User.__table__.drop(engine)
+        engine.dispose()
 
 
 def test_health_is_lightweight():
@@ -100,14 +111,27 @@ def test_login_success_and_failure():
         engine.dispose()
 
 
-def test_role_boundaries():
+def test_role_boundaries_use_current_database_role():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    User.__table__.create(engine)
+    db = TestingSession()
+    db.add(User(id=7, name="Test", email="TEST007", password=pwd.hash("password"), role="student", section="A1"))
+    db.commit()
+    def override_db():
+        yield db
+    app.dependency_overrides[get_db] = override_db
     def make_token(role):
         return jwt.encode({"id": 7, "role": role}, key, algorithm=alg)
-
-    with TestClient(app) as client:
-        assert client.get("/teacher", headers={"Authorization": f"Bearer {make_token('student')}"}).status_code == 403
-        assert client.get("/admin", headers={"Authorization": f"Bearer {make_token('teacher')}"}).status_code == 403
-        assert client.get("/student", headers={"Authorization": f"Bearer {make_token('admin')}"}).status_code == 403
+    try:
+        with TestClient(app) as client:
+            assert client.get("/teacher", headers={"Authorization": f"Bearer {make_token('student')}"}).status_code == 403
+            assert client.get("/admin", headers={"Authorization": f"Bearer {make_token('admin')}"}).status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        db.close()
+        User.__table__.drop(engine)
+        engine.dispose()
 
 
 def test_unauthorized_api_returns_http_error():

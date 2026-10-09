@@ -10,7 +10,7 @@ type ProfileData={id:number;name:string;email:string;role:string;section:string;
 
 export default function Profile(){
  const navigate=useNavigate();const [data,setData]=useState<ProfileData|null>(null);const [error,setError]=useState("")
- useEffect(()=>{if(!localStorage.getItem("token")){navigate("/login");return}apiJson<ProfileData>("/profile").then(setData).catch(e=>setError(e instanceof ApiError?e.message:e instanceof Error?e.message:"Unable to load profile"))},[navigate])
+ useEffect(()=>{if(!sessionStorage.getItem("token")){navigate("/login");return}apiJson<ProfileData>("/profile").then(setData).catch(e=>setError(e instanceof ApiError?e.message:e instanceof Error?e.message:"Unable to load profile"))},[navigate])
  function logout(){clearSession();navigate("/login",{replace:true})}
  const icon=data?.role==="teacher"?<Users size={22}/>:data?.role==="admin"?<ShieldCheck size={22}/>:<GraduationCap size={22}/>
  return <AppLayout title="Profile" subtitle="Account"><section className="lms-grid min-h-[calc(100vh-76px)] p-4 sm:p-6 lg:p-10"><div className="mx-auto max-w-5xl">

@@ -176,3 +176,32 @@ def search_resources_detailed(query, course_ids=None):
 
 def search_resources(query, course_ids=None):
     return search_resources_detailed(query, course_ids)[0]
+
+
+def search_resources_for_quiz(query, course_id):
+    """Retrieve processed material for one course without cold-loading the embedding model."""
+    started = time.perf_counter()
+    resources = _resources((course_id,))
+    results = []
+    seen = set()
+    for item in resources:
+        if item.get("type") != "resource":
+            continue
+        title = " ".join(str(item.get("title") or "Course material").split())
+        content = " ".join(str(item.get("content") or "").split())
+        if len(content) < 40:
+            continue
+        key = (title.lower(), content[:180].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({
+            "title": title,
+            "content": (title + ". " + content)[:8000],
+            "type": item.get("type", "resource"),
+            "course_id": int(item.get("course_id", course_id)),
+            "distance": 0.0,
+        })
+        if len(results) >= 20:
+            break
+    return results, {"mode": "course_scoped_lexical", "retrieval_ms": round((time.perf_counter() - started) * 1000, 2), "resources_considered": len(resources)}

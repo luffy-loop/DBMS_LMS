@@ -9,11 +9,26 @@ from fastapi.testclient import TestClient
 from jose import jwt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from auth import alg, get_user, key
+from database import get_db
 from main import app, give_marks, download_submission, read_pdf_upload
 from models import User, Course, Assignment, Submission
 
+
+
+def install_student_db():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    User.__table__.create(engine)
+    db = TestingSession()
+    db.add(User(id=7, name="Test", email="TEST007", password="hashed", role="student", section="A1"))
+    db.commit()
+    def override_db():
+        yield db
+    app.dependency_overrides[get_db] = override_db
+    return engine, db
 
 def make_token(user_id=7, role="student", **extra):
     return jwt.encode({"id": user_id, "role": role, **extra}, key, algorithm=alg)
@@ -36,10 +51,17 @@ def test_malformed_json_is_rejected_without_stack_trace():
 
 
 def test_invalid_notification_pagination_is_rejected():
-    with TestClient(app) as client:
-        response = client.get("/notifications?page=0", headers={"Authorization": f"Bearer {make_token()}"})
-    assert response.status_code == 422
-    assert "Traceback" not in response.text
+    engine, db = install_student_db()
+    try:
+        with TestClient(app) as client:
+            response = client.get("/notifications?page=0", headers={"Authorization": f"Bearer {make_token()}"})
+        assert response.status_code == 422
+        assert "Traceback" not in response.text
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        db.close()
+        User.__table__.drop(engine)
+        engine.dispose()
 
 
 def test_non_pdf_upload_is_rejected():
