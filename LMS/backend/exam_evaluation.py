@@ -638,7 +638,8 @@ def evaluate_and_record_exam(
             for row in recorded_answers:
                 if row.review_status != "evaluation_failed":
                     row.review_status = "needs_review"
-        submission.marks = None if failed_evaluation else rounded_marks
+        # Aggregate AI marks remain suggestions on question rows until a teacher reviews.
+        submission.marks = None
         submission.marks_published = False
         submission.graded_by = None
         submission.graded_at = None
@@ -714,7 +715,15 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
         for ans in data.answers
     }
 
-    submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+    try:
+        submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+    except HTTPException as exc:
+        if exc.status_code == 500 and db.query(Submission.id).filter(
+            Submission.assignment_id == assignment.id,
+            Submission.student_id == user["id"],
+        ).first():
+            raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+        raise
 
     total_max = sum(q.max_marks for q in questions)
 

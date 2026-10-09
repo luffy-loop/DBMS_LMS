@@ -860,35 +860,20 @@ def submit_assignment(
 
     if answers_json or has_questions:
         import json
-        answers_list = []
-        if answers_json:
-            try:
-                answers_list = json.loads(answers_json)
-            except Exception:
-                answers_list = []
-        answers_map = {
-            item.get("question_id"): {
-                "selected_option_id": item.get("selected_option_id"),
-                "student_answer": item.get("student_answer")
-            }
-            for item in answers_list if isinstance(item, dict) and item.get("question_id")
-        }
-
-        # For a teacher-configured single short-answer question, use the student's
-        # text answer or readable PDF text when the question-specific field is blank.
-        # If PDF text extraction yielded no usable text, require human review instead.
-        if len(assessment_questions) == 1 and assessment_questions[0].question_type == "descriptive":
-            question = assessment_questions[0]
-            current = answers_map.get(question.id, {})
-            current_answer = (current.get("student_answer") or "").strip()
-            if not current_answer:
-                if answer.strip():
-                    current["student_answer"] = answer.strip()
-                elif file_data and len((file_content or "").split()) >= 2:
-                    current["student_answer"] = file_content.strip()
-                elif file_data:
-                    current["manual_review_required"] = True
-                answers_map[question.id] = current
+        try:
+            answers_map = parse_question_answers(answers_json, {question.id for question in assessment_questions})
+            answers_map, _mapping_status = map_pdf_answers(
+                assessment_questions, answers_map, answer, file_content if file_data else "",
+                readable_pdf=(len((file_content or "").split()) >= 2) if file_data else None,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if "cannot be mapped reliably" in detail:
+                raise HTTPException(status_code=400, detail={
+                    "error": "QUESTION_MAPPING_REQUIRED",
+                    "message": detail + " No submission has been recorded; the selected PDF remains available for retry.",
+                }) from exc
+            raise HTTPException(status_code=400, detail=detail) from exc
 
         try:
             submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
@@ -900,7 +885,7 @@ def submit_assignment(
                 raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
             raise
         if answer.strip():
-            submission.answer = f"{answer.strip()} | {submission.answer}"
+            submission.answer = answer.strip()
             db.commit()
     else:
         submission = Submission(
@@ -974,6 +959,72 @@ def submit_assignment(
 
     notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
     return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
+
+def parse_question_answers(raw_answers: str | None, valid_question_ids: set[int]) -> dict[int, dict]:
+    if not raw_answers:
+        return {}
+    try:
+        items = json.loads(raw_answers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("answers_json must be valid JSON") from exc
+    if not isinstance(items, list):
+        raise ValueError("answers_json must be a JSON array")
+    parsed = {}
+    for item in items:
+        if not isinstance(item, dict) or not item.get("question_id"):
+            raise ValueError("Each answer must include question_id")
+        try:
+            qid = int(item["question_id"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Question IDs must be integers") from exc
+        if qid not in valid_question_ids:
+            raise ValueError(f"Question {qid} does not belong to this assessment")
+        if qid in parsed:
+            raise ValueError(f"Duplicate answer submitted for question {qid}")
+        answer_text = item.get("student_answer", "")
+        if answer_text is not None and not isinstance(answer_text, str):
+            raise ValueError(f"Answer for question {qid} must be text")
+        parsed[qid] = {"selected_option_id": item.get("selected_option_id"), "student_answer": answer_text or ""}
+    return parsed
+
+
+def map_pdf_answers(questions, answers_map, written_answer, pdf_text, readable_pdf: bool | None = None):
+    def field(question, name):
+        return question.get(name) if isinstance(question, dict) else getattr(question, name)
+    mapped = {int(field(q, "id")): dict(answers_map.get(int(field(q, "id")), {})) for q in questions}
+    extracted = (pdf_text or "").strip()
+    readable = len(extracted.split()) >= 2 if readable_pdf is None else readable_pdf
+    if len(questions) == 1 and field(questions[0], "question_type") == "descriptive":
+        qid = int(field(questions[0], "id"))
+        row = mapped.setdefault(qid, {})
+        if not (row.get("student_answer") or "").strip():
+            if (written_answer or "").strip():
+                row["student_answer"] = written_answer.strip()
+                return mapped, "mapped"
+            if readable:
+                row["student_answer"] = extracted
+                return mapped, "mapped"
+            row["manual_review_required"] = True
+            return mapped, "manual_review"
+        return mapped, "question_answer"
+    if not readable:
+        for question in questions:
+            if field(question, "question_type") == "descriptive":
+                qid = int(field(question, "id"))
+                row = mapped.setdefault(qid, {})
+                if not (row.get("student_answer") or "").strip():
+                    row["manual_review_required"] = True
+        return mapped, "manual_review"
+    missing = [
+        int(field(question, "id")) for question in questions
+        if len(questions) > 1
+        and field(question, "question_type") == "descriptive"
+        and not (mapped.get(int(field(question, "id")), {}).get("student_answer") or "").strip()
+    ]
+    if missing:
+        raise ValueError("Readable PDF cannot be mapped reliably to multiple questions; provide question-wise answers. Missing question IDs: " + str(missing))
+    return mapped, "question_wise"
+
 
 def submission_payload(submission, db: Session | None = None):
     file_doc = None
