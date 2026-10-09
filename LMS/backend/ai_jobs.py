@@ -116,6 +116,13 @@ def _generate_grounded_questions(results, count):
             r"^\s*(?P<term>[A-Za-z][A-Za-z0-9/&() -]{1,70}?)\s+[—–-]\s+"
             r"(?P<definition>.+?)\s*[.!?]?\s*$"
         ),
+        re.compile(
+            r"^\s*(?:(?:a|an|the)\s+)?"
+            r"(?P<term>[A-Za-z][A-Za-z0-9/&() -]{1,70}?)\s+"
+            r"(?:protect|protects|allow|allows|use|uses|provide|provides|support|supports|prevent|prevents|control|controls|enable|enables|store|stores|combine|combines|organize|organizes|organise|organises|measure|measures|maintain|maintains|coordinate|coordinates|represent|represents|contain|contains|require|requires|perform|performs|occur|occurs|happen|happens|consists of|depends on|works by|operates by|save|saves|restore|restores|load|loads|connect|connects|transfer|transfers|reduce|reduces|increase|increases|describe|describes|distinguish|distinguishes)\s+"
+            r"(?P<definition>.+?)\s*[.!?]?\s*$",
+            re.IGNORECASE,
+        ),
     )
     concepts = []
     seen_terms = set()
