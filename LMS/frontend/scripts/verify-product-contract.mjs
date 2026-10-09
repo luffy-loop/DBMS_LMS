@@ -13,7 +13,6 @@ const routes = read("src/main.tsx")
 const assignments = read("src/pages/Assignments.tsx")
 const admin = read("src/pages/Admin.tsx")
 const quiz = read("src/pages/QuizLab.tsx")
-const quiz = read("src/pages/QuizLab.tsx")
 
 const checks = [
   [config.includes("https://dbms-lms-hwvp.onrender.com"), "production API URL"],
