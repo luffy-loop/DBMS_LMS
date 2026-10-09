@@ -439,7 +439,7 @@ def evaluate_and_record_exam(
     - Evaluates all Descriptive questions via pgvector cosine similarity in PostgreSQL.
     - Persists individual student_question_answers and overall submission.
     """
-    now = datetime.now()
+    now = get_now()
     questions = db.query(AssessmentQuestion).filter(
         AssessmentQuestion.assignment_id == assignment.id
     ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()

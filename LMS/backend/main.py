@@ -1181,66 +1181,6 @@ def teacher_assessment_report(
 
     def count_status(*statuses):
         return sum(1 for item in students if item["review_status"] in statuses)
-        submission = submission_by_student.get(student_id)
-        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
-        question_report = []
-        for question in questions:
-            row = answer_map.get(question.id)
-            evaluation = None
-            if row and row.rubric_evaluation:
-                try:
-                    evaluation = json.loads(row.rubric_evaluation)
-                except (TypeError, ValueError):
-                    evaluation = None
-            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
-            matched = sorted({
-                str(term)
-                for criterion in criteria if isinstance(criterion, dict)
-                for term in (criterion.get("matched_concepts") or [])
-                if isinstance(term, (str, int, float))
-            })
-            missing = sorted({
-                str(term)
-                for criterion in criteria if isinstance(criterion, dict)
-                for term in (criterion.get("missing_concepts") or [])
-                if isinstance(term, (str, int, float))
-            })
-            question_report.append({
-                "question_id": question.id,
-                "question": question.question_text,
-                "reference_answer": question.reference_answer,
-                "max_marks": question.max_marks,
-                "student_answer": row.student_answer if row else None,
-                "selected_option_id": row.selected_option_id if row else None,
-                "awarded_marks": (
-                    row.teacher_override_marks if row and row.teacher_override_marks is not None
-                    else row.awarded_marks if row else None
-                ),
-                "feedback": (
-                    row.teacher_review_note if row and row.teacher_review_note
-                    else evaluation.get("feedback") or evaluation.get("summary") if isinstance(evaluation, dict)
-                    else None
-                ),
-                "matched_concepts": matched,
-                "missing_concepts": missing,
-                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
-                "evaluation_status": row.evaluation_status if row else None,
-            })
-        marks = submission.marks if submission else None
-        students.append({
-            "student_id": student_id,
-            "student_name": student_name,
-            "student_email": email,
-            "submission_status": "submitted" if submission else "not_submitted",
-            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
-            "grading_status": "not_submitted" if not submission else ("graded" if marks is not None else "awaiting_grading"),
-            "marks_status": "available" if marks is not None else "not_available",
-            "total_marks": marks,
-            "max_marks": maximum,
-            "percentage": round((marks / maximum) * 100, 1) if marks is not None and maximum else None,
-            "questions": question_report,
-        })
-
     report = {
         "assignment": {"id": assignment.id, "title": assignment.title, "course_id": assignment.course_id},
         "enrolled_students": len(enrolled),
