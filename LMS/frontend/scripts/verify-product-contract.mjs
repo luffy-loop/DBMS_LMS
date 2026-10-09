@@ -13,6 +13,7 @@ const routes = read("src/main.tsx")
 const assignments = read("src/pages/Assignments.tsx")
 const admin = read("src/pages/Admin.tsx")
 const quiz = read("src/pages/QuizLab.tsx")
+const quiz = read("src/pages/QuizLab.tsx")
 
 const checks = [
   [config.includes("https://dbms-lms-hwvp.onrender.com"), "production API URL"],
@@ -22,6 +23,7 @@ const checks = [
   [copilot.includes("No course context"), "optional course context"],
   [copilot.includes('course_id:courseId?Number(courseId):null'), "optional course request"],
   [api.includes("sessionStorage.getItem") && !api.includes("localStorage"), "per-tab API token storage"],
+  [quiz.includes('sessionStorage.getItem("token")') && quiz.includes('sessionStorage.getItem("role")') && !quiz.includes("localStorage"), "Quiz Lab uses per-tab session identity"],
   [quiz.includes('sessionStorage.getItem("token")') && quiz.includes('sessionStorage.getItem("role")') && !quiz.includes("localStorage"), "Quiz Lab uses per-tab session identity"],
   [login.includes("sessionStorage.setItem") && !login.includes("localStorage"), "per-tab login storage"],
   [routes.includes('"/auth/session"') && routes.includes('roles={["admin"]}'), "server-synced role-aware routes"],

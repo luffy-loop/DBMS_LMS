@@ -1,0 +1,56 @@
+name: backend-ci
+
+on:
+  push:
+    paths:
+      - "LMS/backend/**"
+      - "LMS/frontend/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "LMS/backend/**"
+      - "LMS/frontend/**"
+      - ".github/workflows/backend-ci.yml"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+    defaults:
+      run:
+        working-directory: LMS/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+      - name: Compile backend
+        run: python -m compileall -q .
+      - name: Run backend tests
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: LMS/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: LMS/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Run accessibility lint
+        run: npm run a11y:lint
+      - name: Verify frontend product contract
+        run: npm run verify:contract
+      - name: Build frontend
+        env:
+          VITE_API_URL: https://dbms-lms-hwvp.onrender.com
+        run: npm run build
