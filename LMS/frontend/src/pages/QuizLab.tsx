@@ -11,7 +11,7 @@ type Job={job_id:string;status:string;result:JobResult|null;error?:{message?:str
 
 export default function QuizLab() {
   const navigate=useNavigate()
-  const role=localStorage.getItem("role")||"student"
+  const role=sessionStorage.getItem("role")||"student"
   const [courses,setCourses]=useState<Course[]>([])
   const [courseId,setCourseId]=useState("")
   const [jobId,setJobId]=useState("")
@@ -27,7 +27,7 @@ export default function QuizLab() {
   const [publishing,setPublishing]=useState(false)
 
   useEffect(() => {
-    if(!localStorage.getItem("token")) { navigate("/login"); return }
+    if(!sessionStorage.getItem("token")) { navigate("/login"); return }
     apiJson<Course[]>("/my-courses").then(data=>{setCourses(data);if(data[0])setCourseId(String(data[0].id))}).catch(()=>setError("Unable to load your courses"))
   },[navigate])
 
@@ -48,7 +48,7 @@ export default function QuizLab() {
 
   async function generate() {
     if(!courseId) {setError("Select a course first");return}
-    setError("");setResult(null);setQuestions([]);setStatus("QUEUED")
+    setError("");setResult(null);setQuestions([]);setJobId("");setStatus("QUEUED")
     try {
       const job=await apiJson<{job_id:string;status:string}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:5})},10000)
       setJobId(job.job_id);setStatus(job.status)

@@ -32,9 +32,9 @@ function AppRoutes(){return <Suspense fallback={<RouteLoading/>}><Routes>
 <Route path="/admin/users" element={<Protected roles={["admin"]}><Admin/></Protected>}/>
 <Route path="/admin/system-health" element={<Protected roles={["admin"]}><Admin/></Protected>}/>
 <Route path="/admin/audit-logs" element={<Protected roles={["admin"]}><Admin/></Protected>}/>
-<Route path="/courses" element={<Protected><Courses/></Protected>}/>
-<Route path="/assignments" element={<Protected><Assignments/></Protected>}/>
-<Route path="/marks" element={<Protected><Marks/></Protected>}/>
+<Route path="/courses" element={<Protected roles={["student","teacher","admin"]}><Courses/></Protected>}/>
+<Route path="/assignments" element={<Protected roles={["student","teacher","admin"]}><Assignments/></Protected>}/>
+<Route path="/marks" element={<Protected roles={["student","teacher","admin"]}><Marks/></Protected>}/>
 <Route path="/search" element={<Protected><AISearch/></Protected>}/>
 <Route path="/copilot" element={<Protected><StudyCopilot/></Protected>}/>
 <Route path="/quiz" element={<Protected><QuizLab/></Protected>}/>

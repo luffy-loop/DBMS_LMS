@@ -29,9 +29,9 @@ def set_job(db, job, status, result=None, error=None):
 
 
 def _timed_search(query, course_id):
-    from vector_store import search_resources_detailed
+    from vector_store import search_resources_for_quiz
     executor=ThreadPoolExecutor(max_workers=1)
-    future=executor.submit(search_resources_detailed,query,(course_id,))
+    future=executor.submit(search_resources_for_quiz,query,course_id)
     try:
         return future.result(timeout=JOB_TIMEOUT)
     except FutureTimeout:
@@ -55,10 +55,12 @@ def run_quiz_job(job_id):
         results,metrics=_timed_search(payload.get("query","key concepts important definitions"),job.course_id)
         db.refresh(job)
         if job.status=="CANCELLED": return
-        if not results: raise ValueError("No indexed learning material is ready for this course")
+        if not results: raise ValueError("No processed course material is available. Upload a PDF or other supported material and wait until processing finishes.")
         set_job(db,job,"GENERATING")
         questions=_generate_grounded_questions(results,int(payload.get("question_count",5)))
         if not questions: raise ValueError("Not enough distinct statements were found in processed course material to draft a quiz. Upload or process more course material.")
+        db.refresh(job)
+        if job.status=="CANCELLED": return
         set_job(db,job,"COMPLETED",{"title":"Course Revision Quiz","course_id":job.course_id,"questions":questions,"metrics":metrics})
     except TimeoutError:
         job=db.query(AIJob).filter(AIJob.id==job_id).first()
