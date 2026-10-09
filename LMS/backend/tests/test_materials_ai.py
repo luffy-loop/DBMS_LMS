@@ -67,3 +67,32 @@ def test_general_study_topics_work_without_course_context():
         result = build_answer(question, [])
         assert phrase in result["answer"].lower()
         assert result["sources"][0]["course_id"] == 0
+
+
+
+def test_mutex_locks_are_supported_without_course_material():
+    from study_copilot import build_answer
+
+    result = build_answer("Explain mutex locks in Operating Systems", [])
+    assert result["mode"] == "general study knowledge"
+    assert "critical section" in result["answer"].lower()
+    assert "acquire" in result["answer"].lower()
+    assert result["sources"][0]["title"] == "Mutex Locks"
+
+
+def test_topic_matching_uses_word_boundaries():
+    from study_knowledge import find_knowledge
+
+    assert find_knowledge("What is a mutex lock?")["topic"] == "Mutex Locks"
+    assert find_knowledge("Explain process vs thread")["topic"] == "Process vs Thread"
+    assert find_knowledge("Explain indexing in a database")["topic"] == "Database Index"
+    assert find_knowledge("Explain indexable data structures") is None
+
+
+def test_semaphores_are_supported():
+    from study_knowledge import find_knowledge
+
+    result = find_knowledge("Explain counting semaphores")
+    assert result["topic"] == "Semaphores"
+    assert "wait" in result["terms"]
+    assert "signal" in result["terms"]
