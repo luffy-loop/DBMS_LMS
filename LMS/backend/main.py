@@ -596,6 +596,27 @@ async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
     return data, content
 
 
+def read_pdf_upload_sync(file: UploadFile) -> tuple[bytes, str]:
+    """Read and validate a submission PDF inside FastAPI's sync worker thread."""
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"", "application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="PDF uploads must use the application/pdf content type")
+    data = file.file.read(max_upload_bytes + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty PDF file")
+    if len(data) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail=f"PDF exceeds the {max_upload_mb} MB upload limit")
+    if b"%PDF-" not in data[:1024]:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    try:
+        content = extract_pdf_text(data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    return data, content
+
+
 def format_iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
@@ -792,7 +813,7 @@ def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depend
     } for a in assignments]
 
 @app.post("/submissions")
-async def submit_assignment(
+def submit_assignment(
     assignment_id: int = Form(...),
     answer: str = Form(""),
     answers_json: str | None = Form(None),
@@ -826,7 +847,7 @@ async def submit_assignment(
 
     file_data = None
     if file:
-        file_data, file_content = await read_pdf_upload(file)
+        file_data, file_content = read_pdf_upload_sync(file)
 
     if not answer.strip() and not file_data and not answers_json:
         raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
@@ -902,8 +923,7 @@ async def submit_assignment(
 
     if file_data:
         try:
-            await asyncio.to_thread(
-                mongo_db.submission_files.insert_one,
+            mongo_db.submission_files.insert_one(
                 {
                     "submission_id": submission.id,
                     "assignment_id": assignment.id,
@@ -918,8 +938,7 @@ async def submit_assignment(
             logger.exception("Submission PDF storage failed submission_id=%s", submission.id)
             mongo_cleanup_ok = True
             try:
-                await asyncio.to_thread(
-                    mongo_db.submission_files.delete_many,
+                mongo_db.submission_files.delete_many(
                     {"submission_id": submission.id}
                 )
             except Exception:

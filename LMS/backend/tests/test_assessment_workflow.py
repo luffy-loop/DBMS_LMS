@@ -3,10 +3,11 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
 from datetime import datetime, timedelta, timezone
+import inspect
 from types import SimpleNamespace
 
 from exam_evaluation import get_now, is_low_score, normalize_datetime
-from main import assessment_deadline
+from main import assessment_deadline, submit_assignment
 from models import Submission
 
 
@@ -41,3 +42,7 @@ def test_evaluation_clock_is_utc_naive_for_database_storage():
 def test_timezone_aware_assessment_times_normalize_to_utc():
     local_time = datetime(2026, 10, 9, 9, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
     assert normalize_datetime(local_time) == datetime(2026, 10, 9, 3, 30)
+
+
+def test_submission_endpoint_uses_sync_worker_for_cpu_bound_evaluation():
+    assert not inspect.iscoroutinefunction(submit_assignment)
