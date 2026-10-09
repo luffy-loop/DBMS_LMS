@@ -19,7 +19,7 @@ from jose import jwt
 from bson import ObjectId
 from database import Base, engine, get_db
 from models import User, Course, Enrollment, Assignment, Submission
-from schemas import Register, Login, CourseCreate, CourseUpdate, EnrollmentCreate, AssignmentCreate, SubmissionCreate
+from schemas import Register, Login, CourseCreate, CourseUpdate, EnrollmentCreate, AssignmentCreate, SubmissionCreate, AdminUserCreate, AdminRoleUpdate
 from auth import get_user, key, alg
 from mongodb import mongo_db
 from notifications import router as notifications_router
@@ -180,8 +180,8 @@ async def register(data: Register, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.roll_no).first()
     if user:
         raise HTTPException(status_code=400, detail="Roll number already registered")
-    if data.role not in ["student", "teacher", "admin"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
+    if data.role != "student":
+        raise HTTPException(status_code=403, detail="Only students can self-register. Teacher accounts are created by an administrator.")
     section = "Unassigned"
     password_hash = await asyncio.to_thread(pwd.hash, data.password)
     user = User(name=data.name, email=data.roll_no, password=password_hash, role=data.role, section=section)
@@ -205,6 +205,13 @@ async def login(data: Login, db: Session = Depends(get_db)):
     dur = (time.perf_counter() - t0) * 1000
     logger.info(f"[AUTH] Login for user={user.id} ({user.role}) took {dur:.2f}ms")
     return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+
+@app.get("/auth/session")
+def auth_session(user=Depends(get_user), db: Session = Depends(get_db)):
+    account = db.query(User).filter(User.id == user["id"]).first()
+    if not account:
+        raise HTTPException(status_code=401, detail="Account no longer exists")
+    return {"id": account.id, "name": account.name, "role": account.role}
 
 @app.get("/profile")
 def profile(user=Depends(get_user), db: Session = Depends(get_db)):
@@ -443,13 +450,15 @@ def extract_pdf_text(data: bytes) -> str:
 
 
 async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
-    if file.content_type != "application/pdf":
+    if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     data = await file.read(max_upload_bytes + 1)
     if not data:
         raise HTTPException(status_code=400, detail="Empty PDF file")
     if len(data) > max_upload_bytes:
         raise HTTPException(status_code=413, detail=f"PDF exceeds the {max_upload_mb} MB upload limit")
+    if b"%PDF-" not in data[:1024]:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
     try:
         content = await asyncio.to_thread(extract_pdf_text, data)
     except Exception:
@@ -666,6 +675,9 @@ async def submit_assignment(
     assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    enrollment = db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == assignment.course_id).first()
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You must be enrolled in this course to submit")
 
     now = get_now()
     start = normalize_datetime(assignment.start_time)
@@ -736,7 +748,7 @@ async def submit_assignment(
         )
 
     notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
-    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks}
+    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks, "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
 
 def submission_payload(submission, db: Session | None = None):
     file_doc = None
@@ -779,6 +791,7 @@ def submission_payload(submission, db: Session | None = None):
         "student_name": student_name,
         "answer": submission.answer,
         "marks": submission.marks,
+        "submitted_at": submission.created_at.isoformat() if submission.created_at else None,
         "max_marks": max_marks,
         "file_id": str(file_doc["_id"]) if file_doc else None,
         "file_name": file_doc.get("filename", "") if file_doc else None
@@ -828,6 +841,7 @@ def build_submission_payloads(submissions: list[Submission], db: Session) -> lis
             "student_name": students.get(s.student_id),
             "answer": s.answer,
             "marks": s.marks,
+            "submitted_at": s.created_at.isoformat() if s.created_at else None,
             "max_marks": max_m,
             "file_id": str(f_doc["_id"]) if f_doc else None,
             "file_name": f_doc.get("filename", "") if f_doc else None
@@ -984,14 +998,74 @@ def download_submission(submission_id: int, user=Depends(get_user), db: Session 
     resource = mongo_db.submission_files.find_one({"submission_id": submission.id})
     if not resource:
         raise HTTPException(status_code=404, detail="Submission file not found")
-    return StreamingResponse(iter([resource["file"]]), media_type=resource.get("content_type", "application/pdf"), headers={"Content-Disposition": f'inline; filename="{resource.get("filename", "submission.pdf")}"'})
+    safe_name = os.path.basename(str(resource.get("filename", "submission.pdf"))).replace(chr(34), "") or "submission.pdf"
+    return StreamingResponse(iter([resource["file"]]), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{safe_name}"'})
 
 @app.get("/admin/users")
-def admin_users(user=Depends(get_user), db: Session = Depends(get_db)):
+def admin_users(page: int = 1, page_size: int = 50, search: str | None = None, role: str | None = None, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access only")
-    rows = db.query(User.id, User.name, User.email, User.role, User.section).order_by(User.role, User.name).all()
-    return [{"id": u[0], "name": u[1], "roll_no": u[2], "role": u[3], "section": u[4] or "Unassigned"} for u in rows]
+    page = max(1, page)
+    page_size = min(100, max(1, page_size))
+    query = db.query(User)
+    if search and search.strip():
+        term = "%" + search.strip().replace("%", "\\%").replace("_", "\\_") + "%"
+        query = query.filter((User.name.ilike(term)) | (User.email.ilike(term)))
+    if role:
+        if role not in {"student", "teacher", "admin"}:
+            raise HTTPException(status_code=422, detail="Invalid role filter")
+        query = query.filter(User.role == role)
+    total = query.count()
+    rows = query.order_by(User.role, User.name, User.id).offset((page - 1) * page_size).limit(page_size).all()
+    return {"users": [{"id": u.id, "name": u.name, "roll_no": u.email, "email": u.email, "role": u.role, "section": u.section or "Unassigned"} for u in rows], "total": total, "page": page, "page_size": page_size}
+
+@app.post("/admin/users", status_code=201)
+async def admin_create_user(data: AdminUserCreate, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    name = data.name.strip()
+    roll_no = data.roll_no.strip()
+    section = data.section.strip() or "Unassigned"
+    if not name or not roll_no:
+        raise HTTPException(status_code=422, detail="Name and roll number are required")
+    if db.query(User.id).filter(User.email == roll_no).first():
+        raise HTTPException(status_code=409, detail="A user with this roll number already exists")
+    account = User(name=name, email=roll_no, password=await asyncio.to_thread(pwd.hash, data.password), role=data.role, section=section)
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    record_audit(db, user["id"], "admin_user_created", "user", account.id, {"role": account.role})
+    return {"id": account.id, "name": account.name, "roll_no": account.email, "role": account.role, "section": account.section}
+
+@app.patch("/admin/users/{user_id}/role")
+def admin_update_user_role(user_id: int, data: AdminRoleUpdate, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    target = db.query(User).filter(User.id == user_id).with_for_update().first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.id == user["id"] and target.role != data.role:
+        raise HTTPException(status_code=400, detail="You cannot change your own role")
+    if target.role == "admin" and data.role != "admin" and db.query(User.id).filter(User.role == "admin").count() <= 1:
+        raise HTTPException(status_code=409, detail="The last administrator cannot be demoted")
+    old_role = target.role
+    if old_role == data.role:
+        return {"id": target.id, "role": target.role, "message": "Role unchanged"}
+    target.role = data.role
+    db.commit()
+    record_audit(db, user["id"], "admin_user_role_changed", "user", target.id, {"from": old_role, "to": target.role})
+    return {"id": target.id, "role": target.role, "message": "Role updated"}
+
+@app.get("/admin/submissions")
+def admin_submissions(page: int = 1, page_size: int = 50, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    page = max(1, page)
+    page_size = min(100, max(1, page_size))
+    query = db.query(Submission).order_by(Submission.id.desc())
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    return {"submissions": build_submission_payloads(rows, db), "total": total, "page": page, "page_size": page_size}
 
 @app.put("/admin/teachers/{teacher_id}/section")
 def assign_teacher_section(teacher_id: int, section: str, user=Depends(get_user), db: Session = Depends(get_db)):

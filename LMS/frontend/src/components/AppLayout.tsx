@@ -1,4 +1,4 @@
-import { BookOpen, LayoutDashboard, BookOpenText, ClipboardList, Award, Search, BrainCircuit, Sparkles, Route, BarChart3, UserRound, LogOut, Menu, X } from "lucide-react"
+import { BookOpen, LayoutDashboard, BookOpenText, ClipboardList, Award, Search, BrainCircuit, Sparkles, Route, BarChart3, UserRound, LogOut, Menu, X, Users, Activity, FileText } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import NotificationBell from "./NotificationBell"
@@ -10,13 +10,24 @@ type NavItem = { path:string; label:string; icon:typeof BookOpen }
 export default function AppLayout({ children, title, subtitle, roleOverride }: { children:React.ReactNode; title?:string; subtitle?:string; roleOverride?:Role }) {
   const navigate=useNavigate()
   const location=useLocation()
-  const role=roleOverride || (localStorage.getItem("role") as Role) || "student"
-  const name=localStorage.getItem("name") || "User"
+  const role=roleOverride || (sessionStorage.getItem("role") as Role) || "student"
+  const name=sessionStorage.getItem("name") || "User"
   const [menuOpen,setMenuOpen]=useState(false)
   const [accountOpen,setAccountOpen]=useState(false)
 
   const dashboard=role==="teacher"?"/teacher":role==="admin"?"/admin":"/dashboard"
-  const items:NavItem[]=[
+  const items:NavItem[]=role==="admin"?[
+    {path:"/admin",label:"System Overview",icon:LayoutDashboard},
+    {path:"/admin/users",label:"User Management",icon:Users},
+    {path:"/marks",label:"Marks & Records",icon:Award},
+    {path:"/courses",label:"Courses & Materials",icon:BookOpenText},
+    {path:"/assignments",label:"Assignments",icon:ClipboardList},
+    {path:"/search",label:"AI Search",icon:Search},
+    {path:"/copilot",label:"Study Copilot",icon:BrainCircuit},
+    {path:"/quiz",label:"Quiz Lab",icon:Sparkles},
+    {path:"/admin/system-health",label:"System Health",icon:Activity},
+    {path:"/admin/audit-logs",label:"Audit Logs",icon:FileText},
+  ]:[
     {path:dashboard,label:"Dashboard",icon:LayoutDashboard},
     {path:"/courses",label:"Courses",icon:BookOpenText},
     {path:"/assignments",label:"Assignments",icon:ClipboardList},
@@ -32,7 +43,7 @@ export default function AppLayout({ children, title, subtitle, roleOverride }: {
   function logout(){clearSession();setAccountOpen(false);setMenuOpen(false);navigate("/login",{replace:true})}
 
   useEffect(()=>{
-    if(!localStorage.getItem("token")){navigate("/login",{replace:true});return}
+    if(!sessionStorage.getItem("token")){navigate("/login",{replace:true});return}
     setMenuOpen(false);setAccountOpen(false)
   },[location.pathname,navigate])
 
@@ -73,6 +84,6 @@ export default function AppLayout({ children, title, subtitle, roleOverride }: {
       </nav>}
       <main className="lms-page min-w-0 pb-8 sm:pb-10">{children}</main>
     </div>
-    <nav className="lms-mobile-nav lg:hidden" aria-label="Mobile quick navigation">{[{path:dashboard,label:"Home",icon:LayoutDashboard},{path:"/courses",label:"Courses",icon:BookOpenText},{path:"/assignments",label:"Tasks",icon:ClipboardList},{path:"/copilot",label:"AI",icon:Sparkles},{path:"/profile",label:"Profile",icon:UserRound}].map(({path,label,icon:Icon})=><button key={path} onClick={()=>navigate(path)} className={active(path)?"active":""} aria-current={active(path)?"page":undefined}><Icon size={18}/><span>{label}</span></button>)}</nav>
+    <nav className="lms-mobile-nav lg:hidden" aria-label="Mobile quick navigation">{(role==="admin"?[{path:dashboard,label:"Home",icon:LayoutDashboard},{path:"/admin/users",label:"Users",icon:Users},{path:"/marks",label:"Marks",icon:Award},{path:"/assignments",label:"Tasks",icon:ClipboardList},{path:"/profile",label:"Profile",icon:UserRound}]:[{path:dashboard,label:"Home",icon:LayoutDashboard},{path:"/courses",label:"Courses",icon:BookOpenText},{path:"/assignments",label:"Tasks",icon:ClipboardList},{path:"/copilot",label:"AI",icon:Sparkles},{path:"/profile",label:"Profile",icon:UserRound}]).map(({path,label,icon:Icon})=><button key={path} onClick={()=>navigate(path)} className={active(path)?"active":""} aria-current={active(path)?"page":undefined}><Icon size={18}/><span>{label}</span></button>)}</nav>
   </div>
 }

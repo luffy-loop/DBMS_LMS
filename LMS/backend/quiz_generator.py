@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
@@ -59,7 +59,13 @@ def generate_quiz(data: QuizGenerateRequest, background_tasks: BackgroundTasks, 
     if user["role"] not in {"student", "teacher", "admin"}:
         raise HTTPException(status_code=403, detail="Access denied")
     course = _can_access_course(user, data.course_id, db)
-    job = create_job(db, user["id"], course.id, "quiz", {"query": "key concepts important definitions", "question_count": data.question_count})
+    active = db.query(AIJob).filter(AIJob.user_id == user["id"], AIJob.course_id == course.id, AIJob.job_type == "quiz", AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"})).order_by(AIJob.created_at.desc()).first()
+    if active:
+        return {"job_id": active.job_id, "status": active.status, "reused": True}
+    active_count = db.query(AIJob.id).filter(AIJob.job_type == "quiz", AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"})).count()
+    if active_count >= 3:
+        raise HTTPException(status_code=429, detail="Quiz generation is busy. Wait for an active job to finish before retrying.")
+    job = create_job(db, user["id"], course.id, "quiz", {"query": "course material", "question_count": data.question_count})
     background_tasks.add_task(run_quiz_job, job.id)
     return {"job_id": job.job_id, "status": job.status}
 
@@ -69,6 +75,11 @@ def quiz_job_status(job_id: str, user=Depends(get_user), db: Session = Depends(g
     job = db.query(AIJob).filter(AIJob.job_id == job_id, AIJob.user_id == user["id"], AIJob.job_type == "quiz").first()
     if not job:
         raise HTTPException(status_code=404, detail="Quiz job not found")
+    if job.status in {"QUEUED", "RETRIEVING", "GENERATING"} and job.updated_at < datetime.utcnow() - timedelta(minutes=5):
+        job.status = "FAILED"
+        job.error = json.dumps({"error": "JOB_STALE", "message": "This job stopped updating. Retry generation; no duplicate active job will be created."})
+        job.updated_at = datetime.utcnow()
+        db.commit()
     return {"job_id":job.job_id,"status":job.status,"result":json.loads(job.result) if job.result else None,"error":json.loads(job.error) if job.error and job.error.startswith("{") else job.error,"created_at":job.created_at.isoformat(),"updated_at":job.updated_at.isoformat()}
 
 

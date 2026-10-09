@@ -41,8 +41,8 @@ export default function TeacherDashboard() {
   }
 
   useEffect(() => {
-    if (!localStorage.getItem("token")) { navigate("/login"); return }
-    if (localStorage.getItem("role") !== "teacher") { navigate("/dashboard"); return }
+    if (!sessionStorage.getItem("token")) { navigate("/login"); return }
+    if (sessionStorage.getItem("role") !== "teacher") { navigate("/dashboard"); return }
     load()
   }, [navigate])
 

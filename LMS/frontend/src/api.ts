@@ -9,10 +9,10 @@ export class ApiError extends Error {
 function requestId(){if(typeof crypto!=="undefined"&&"randomUUID" in crypto)return crypto.randomUUID();return Math.random().toString(36).slice(2)}
 
 export function clearSession(){
-  localStorage.removeItem("token")
-  localStorage.removeItem("role")
-  localStorage.removeItem("name")
-  localStorage.removeItem("userId")
+  sessionStorage.removeItem("token")
+  sessionStorage.removeItem("role")
+  sessionStorage.removeItem("name")
+  sessionStorage.removeItem("userId")
 }
 
 function errorMessage(status:number,detail:unknown){
@@ -38,7 +38,7 @@ export async function apiFetch(path:string,options:RequestInit={},timeoutMs=1500
   }
   const headers=new Headers(options.headers)
   headers.set("X-Request-ID",requestId())
-  const token=localStorage.getItem("token")
+  const token=sessionStorage.getItem("token")
   if(token&&!headers.has("Authorization"))headers.set("Authorization","Bearer "+token)
   try{
     const response=await fetch(API+path,{...options,headers,signal:controller.signal})
@@ -64,7 +64,7 @@ export async function apiJson<T>(path:string,options:RequestInit={},timeoutMs=15
 export function uploadFile(path:string,file:File,fields:Record<string,string>,onProgress:(value:number)=>void,signal?:AbortSignal){
  return new Promise<unknown>((resolve,reject)=>{
   const xhr=new XMLHttpRequest();xhr.open("POST",API+path)
-  const token=localStorage.getItem("token");if(token)xhr.setRequestHeader("Authorization","Bearer "+token)
+  const token=sessionStorage.getItem("token");if(token)xhr.setRequestHeader("Authorization","Bearer "+token)
   xhr.setRequestHeader("X-Request-ID",requestId());xhr.responseType="json"
   xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100))}
   xhr.onload=()=>{const payload=xhr.response??(()=>{try{return JSON.parse(xhr.responseText)}catch{return {}}})();if(xhr.status>=200&&xhr.status<300)resolve(payload);else{if(xhr.status===401){clearSession();window.dispatchEvent(new Event("lms:logout"))}reject(new ApiError(xhr.status,errorMessage(xhr.status,payload?.detail),payload))}}

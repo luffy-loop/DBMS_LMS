@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { API } from "../config"
+import { clearSession } from "../api"
 import { BookOpen, ArrowLeft } from "lucide-react"
 
 
@@ -35,11 +36,11 @@ export default function Login() {
         throw new Error(data.detail || "Login failed")
       }
 
-      localStorage.clear()
-      localStorage.setItem("token", data.token)
-      localStorage.setItem("role", data.role)
-      localStorage.setItem("name", data.name)
-      localStorage.setItem("userId", data.id)
+      clearSession()
+      sessionStorage.setItem("token", data.token)
+      sessionStorage.setItem("role", data.role)
+      sessionStorage.setItem("name", data.name)
+      sessionStorage.setItem("userId", data.id)
 
       if (data.role === "teacher") {
         navigate("/teacher")
