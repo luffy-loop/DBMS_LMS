@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
@@ -77,10 +77,11 @@ cors_origins = [
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    request.state.request_id = request_id
     start_time = time.perf_counter()
     response = await call_next(request)
     process_time = time.perf_counter() - start_time
-    request_id = request.headers.get("X-Request-ID") or uuid4().hex
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{process_time * 1000:.2f}ms"
     log_event = {
@@ -193,29 +194,102 @@ async def register(data: Register, db: Session = Depends(get_db)):
     return {"message": "User registered successfully", "id": user.id, "role": user.role}
 
 @app.post("/login")
-async def login(data: Login, db: Session = Depends(get_db)):
-    t0 = time.perf_counter()
-    user = db.query(User).filter(User.email == data.roll_no).first()
-    stored_hash = user.password if user else LOGIN_DUMMY_HASH
-    valid = await asyncio.to_thread(pwd.verify, data.password, stored_hash)
-    if not user or not valid:
-        raise HTTPException(status_code=401, detail="Invalid roll number or password")
-    token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
-    record_audit(db, user.id, "login", "user", user.id, {"role": user.role})
-    dur = (time.perf_counter() - t0) * 1000
-    logger.info(f"[AUTH] Login for user={user.id} ({user.role}) took {dur:.2f}ms")
-    return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+def login(data: Login, request: Request, db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    timings = {}
+    status = "database_failure"
+
+    try:
+        acquire_started = time.perf_counter()
+        try:
+            db.connection()
+        finally:
+            timings["db_connection_acquire_ms"] = round((time.perf_counter() - acquire_started) * 1000, 2)
+
+        query_started = time.perf_counter()
+        user = db.query(User).filter(User.email == data.roll_no).first()
+        timings["user_query_ms"] = round((time.perf_counter() - query_started) * 1000, 2)
+
+        password_started = time.perf_counter()
+        stored_hash = user.password if user else LOGIN_DUMMY_HASH
+        valid = pwd.verify(data.password, stored_hash)
+        timings["password_verification_ms"] = round((time.perf_counter() - password_started) * 1000, 2)
+        if not user or not valid:
+            status = "invalid_credentials"
+            raise HTTPException(status_code=401, detail="Invalid roll number or password")
+
+        jwt_started = time.perf_counter()
+        token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
+        timings["jwt_generation_ms"] = round((time.perf_counter() - jwt_started) * 1000, 2)
+
+        audit_started = time.perf_counter()
+        try:
+            record_audit(db, user.id, "login", "user", user.id, {"role": user.role}, raise_on_error=True)
+        except Exception:
+            timings["audit_persistence_ms"] = round((time.perf_counter() - audit_started) * 1000, 2)
+            status = "audit_persistence_failure"
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AUDIT_UNAVAILABLE",
+                    "message": "Login could not be completed because the security audit could not be persisted. Please retry.",
+                },
+            )
+        timings["audit_persistence_ms"] = round((time.perf_counter() - audit_started) * 1000, 2)
+        status = "success"
+        return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+    except SQLAlchemyError:
+        status = "database_failure"
+        raise
+    except HTTPException:
+        if status == "database_failure" and "user_query_ms" in timings:
+            status = "request_rejected"
+        raise
+    finally:
+        timings["total_login_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        logger.info(json.dumps({
+            "event": "login_timing",
+            "request_id": getattr(request.state, "request_id", None),
+            "status": status,
+            "timings_ms": timings,
+        }, separators=(",", ":")))
 
 @app.get("/auth/session")
-def auth_session(user=Depends(get_user), db: Session = Depends(get_db)):
+def auth_session(request: Request, user=Depends(get_user), db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    acquire_started = time.perf_counter()
+    db.connection()
+    acquire_ms = round((time.perf_counter() - acquire_started) * 1000, 2)
+    query_started = time.perf_counter()
     account = db.query(User).filter(User.id == user["id"]).first()
+    query_ms = round((time.perf_counter() - query_started) * 1000, 2)
     if not account:
+        logger.info(json.dumps({
+            "event": "auth_session_timing",
+            "request_id": getattr(request.state, "request_id", None),
+            "status": "account_missing",
+            "db_connection_acquire_ms": acquire_ms,
+            "user_query_ms": query_ms,
+            "total_ms": round((time.perf_counter() - started) * 1000, 2),
+        }, separators=(",", ":")))
         raise HTTPException(status_code=401, detail="Account no longer exists")
+    logger.info(json.dumps({
+        "event": "auth_session_timing",
+        "request_id": getattr(request.state, "request_id", None),
+        "status": "success",
+        "db_connection_acquire_ms": acquire_ms,
+        "user_query_ms": query_ms,
+        "total_ms": round((time.perf_counter() - started) * 1000, 2),
+    }, separators=(",", ":")))
     return {"id": account.id, "name": account.name, "role": account.role}
 
 @app.get("/profile")
-def profile(user=Depends(get_user), db: Session = Depends(get_db)):
-    t0 = time.perf_counter()
+def profile(request: Request, user=Depends(get_user), db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    acquire_started = time.perf_counter()
+    db.connection()
+    acquire_ms = round((time.perf_counter() - acquire_started) * 1000, 2)
+    profile_work_started = time.perf_counter()
     account = db.query(User).filter(User.id == user["id"]).first()
     if not account:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -244,6 +318,14 @@ def profile(user=Depends(get_user), db: Session = Depends(get_db)):
             c_title = course_map.get(a.course_id, "Course")
             upcoming.append({"id": a.id, "title": a.title, "type": a.type, "course": c_title, "start_time": format_iso(a.start_time), "deadline": format_iso(deadline)})
     upcoming.sort(key=lambda x: x["deadline"])
+    logger.info(json.dumps({
+        "event": "profile_timing",
+        "request_id": getattr(request.state, "request_id", None),
+        "status": "success",
+        "db_connection_acquire_ms": acquire_ms,
+        "profile_queries_and_projection_ms": round((time.perf_counter() - profile_work_started) * 1000, 2),
+        "total_ms": round((time.perf_counter() - started) * 1000, 2),
+    }, separators=(",", ":")))
     return {"id": account.id, "name": account.name, "email": account.email, "role": account.role, "section": account.section or "Unassigned", "courses": [{"id": c.id, "title": c.title, "description": c.description} for c in course_rows], "upcoming": upcoming[:6]}
 
 @app.get("/student")
@@ -381,10 +463,10 @@ async def create_assignment(
     if type not in ["assignment", "test", "exam"]:
         raise HTTPException(status_code=400, detail="Invalid assessment type")
     if start_time and end_time and end_time <= start_time:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
+        raise HTTPException(status_code=400, detail="Due time must be after start time")
     if duration_minutes is not None and duration_minutes <= 0:
         raise HTTPException(status_code=400, detail="Duration must be greater than zero")
-    if duration_minutes and not start_time:
+    if duration_minutes is not None and not start_time:
         raise HTTPException(status_code=400, detail="Start time is required when duration is set")
 
     course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
@@ -436,11 +518,11 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is not None:
-        return dt.astimezone().replace(tzinfo=None)
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
 def get_now() -> datetime:
-    return datetime.now()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 get_utc_now = get_now
 
@@ -449,9 +531,18 @@ def extract_pdf_text(data: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
 
+def safe_upload_filename(filename: str | None, default: str = "submission.pdf") -> str:
+    name = os.path.basename((filename or "").replace("\\", "/")).strip()
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in "\r\n\t")
+    return name[:180] or default
+
+
 async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"", "application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="PDF uploads must use the application/pdf content type")
     data = await file.read(max_upload_bytes + 1)
     if not data:
         raise HTTPException(status_code=400, detail="Empty PDF file")
@@ -480,7 +571,7 @@ def assessment_deadline(assignment):
     start = normalize_datetime(assignment.start_time)
     if end:
         deadlines.append(end)
-    if start and assignment.duration_minutes:
+    if start and assignment.duration_minutes and assignment.type in {"test", "exam"}:
         deadlines.append(start + timedelta(minutes=assignment.duration_minutes))
     return min(deadlines) if deadlines else None
 
@@ -719,7 +810,15 @@ async def submit_assignment(
             }
             for item in answers_list if isinstance(item, dict) and item.get("question_id")
         }
-        submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+        try:
+            submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+        except HTTPException as exc:
+            if exc.status_code == 500 and db.query(Submission.id).filter(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == user["id"],
+            ).first():
+                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+            raise
         if answer.strip():
             submission.answer = f"{answer.strip()} | {submission.answer}"
             db.commit()
@@ -730,25 +829,73 @@ async def submit_assignment(
             answer=answer.strip()
         )
         db.add(submission)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            if db.query(Submission.id).filter(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == user["id"],
+            ).first():
+                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+            raise
         db.refresh(submission)
 
     if file_data:
-        await asyncio.to_thread(
-            mongo_db.submission_files.insert_one,
-            {
-                "submission_id": submission.id,
-                "assignment_id": assignment.id,
-                "student_id": user["id"],
-                "filename": file.filename or "submission.pdf",
-                "content_type": "application/pdf",
-                "file": file_data,
-                "created_at": datetime.utcnow()
-            }
-        )
+        try:
+            await asyncio.to_thread(
+                mongo_db.submission_files.insert_one,
+                {
+                    "submission_id": submission.id,
+                    "assignment_id": assignment.id,
+                    "student_id": user["id"],
+                    "filename": safe_upload_filename(file.filename),
+                    "content_type": "application/pdf",
+                    "file": file_data,
+                    "created_at": datetime.utcnow()
+                }
+            )
+        except Exception:
+            logger.exception("Submission PDF storage failed submission_id=%s", submission.id)
+            mongo_cleanup_ok = True
+            try:
+                await asyncio.to_thread(
+                    mongo_db.submission_files.delete_many,
+                    {"submission_id": submission.id}
+                )
+            except Exception:
+                mongo_cleanup_ok = False
+                logger.exception("Submission PDF compensation failed submission_id=%s", submission.id)
+            db_cleanup_ok = True
+            try:
+                from models import StudentQuestionAnswer
+                db.query(StudentQuestionAnswer).filter(
+                    StudentQuestionAnswer.submission_id == submission.id
+                ).delete(synchronize_session=False)
+                db.query(Submission).filter(Submission.id == submission.id).delete(synchronize_session=False)
+                db.commit()
+            except Exception:
+                db.rollback()
+                db_cleanup_ok = False
+                logger.exception("Submission database compensation failed submission_id=%s", submission.id)
+            if mongo_cleanup_ok and db_cleanup_ok:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "SUBMISSION_STORAGE_FAILED",
+                        "message": "PDF storage failed and the submission was rolled back. Please retry."
+                    },
+                )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "SUBMISSION_RECONCILIATION_REQUIRED",
+                    "message": "PDF storage failed and automatic cleanup could not be confirmed. Contact the course teacher before retrying."
+                },
+            )
 
     notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
-    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks, "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
+    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
 
 def submission_payload(submission, db: Session | None = None):
     file_doc = None
@@ -791,6 +938,9 @@ def submission_payload(submission, db: Session | None = None):
         "student_name": student_name,
         "answer": submission.answer,
         "marks": submission.marks,
+        "marks_published": bool(submission.marks_published),
+        "teacher_review_note": submission.teacher_review_note,
+        "review_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"),
         "submitted_at": submission.created_at.isoformat() if submission.created_at else None,
         "max_marks": max_marks,
         "file_id": str(file_doc["_id"]) if file_doc else None,
@@ -841,6 +991,9 @@ def build_submission_payloads(submissions: list[Submission], db: Session) -> lis
             "student_name": students.get(s.student_id),
             "answer": s.answer,
             "marks": s.marks,
+            "marks_published": bool(s.marks_published),
+            "teacher_review_note": s.teacher_review_note,
+            "review_status": "published" if s.marks_published else ("awaiting_publication" if s.marks is not None else "awaiting_grading"),
             "submitted_at": s.created_at.isoformat() if s.created_at else None,
             "max_marks": max_m,
             "file_id": str(f_doc["_id"]) if f_doc else None,
@@ -853,7 +1006,285 @@ def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
-    return build_submission_payloads(subs, db)
+    results = build_submission_payloads(subs, db)
+    for item, submission in zip(results, subs):
+        if not submission.marks_published:
+            item["marks"] = None
+            item["teacher_review_note"] = None
+            item["marks_status"] = "awaiting_publication" if submission.marks is not None else "awaiting_grading"
+        else:
+            item["marks_status"] = "published"
+            item["percentage"] = round((submission.marks / item["max_marks"]) * 100, 1) if submission.marks is not None and item.get("max_marks") else None
+    return results
+
+@app.get("/teacher/assignments/{assignment_id}/report")
+def teacher_assessment_report(
+    assignment_id: int,
+    response_format: str = "json",
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+):
+    if user["role"] not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+    if response_format not in {"json", "csv"}:
+        raise HTTPException(status_code=400, detail="response_format must be json or csv")
+
+    from models import AssessmentQuestion, StudentQuestionAnswer
+
+    assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if user["role"] == "teacher" and assignment.teacher_id != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only view reports for your own assessments")
+
+    enrolled = (
+        db.query(User.id, User.name, User.email)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .filter(Enrollment.course_id == assignment.course_id)
+        .order_by(User.id)
+        .all()
+    )
+    submissions = db.query(Submission).filter(Submission.assignment_id == assignment.id).all()
+    submission_by_student = {item.student_id: item for item in submissions}
+    submission_files = {}
+    try:
+        file_docs = mongo_db.submission_files.find(
+            {"submission_id": {"$in": [item.id for item in submissions]}},
+            {"_id": 1, "submission_id": 1, "filename": 1},
+        ) if submissions else []
+        submission_files = {doc["submission_id"]: doc for doc in file_docs}
+    except Exception:
+        logger.warning("Unable to load submission file metadata for assessment report id=%s", assignment.id)
+    questions = (
+        db.query(AssessmentQuestion)
+        .filter(AssessmentQuestion.assignment_id == assignment.id)
+        .order_by(AssessmentQuestion.order_index, AssessmentQuestion.id)
+        .all()
+    )
+    question_ids = [question.id for question in questions]
+    submission_ids = [item.id for item in submissions]
+    answer_rows = (
+        db.query(StudentQuestionAnswer)
+        .filter(
+            StudentQuestionAnswer.submission_id.in_(submission_ids),
+            StudentQuestionAnswer.question_id.in_(question_ids),
+        )
+        .all()
+        if submission_ids and question_ids else []
+    )
+    answers_by_submission = {}
+    for row in answer_rows:
+        answers_by_submission.setdefault(row.submission_id, {})[row.question_id] = row
+
+    maximum = sum(question.max_marks for question in questions) if questions else 100
+    from exam_evaluation import low_score_threshold
+    threshold = low_score_threshold()
+    students = []
+    for student_id, student_name, email in enrolled:
+        submission = submission_by_student.get(student_id)
+        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
+        question_report = []
+        for question in questions:
+            row = answer_map.get(question.id)
+            evaluation = None
+            if row and row.rubric_evaluation:
+                try:
+                    evaluation = json.loads(row.rubric_evaluation)
+                except (TypeError, ValueError):
+                    evaluation = None
+            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
+            matched = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("matched_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            missing = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("missing_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            question_report.append({
+                "question_id": question.id,
+                "question": question.question_text,
+                "reference_answer": question.reference_answer,
+                "max_marks": question.max_marks,
+                "student_answer": row.student_answer if row else None,
+                "selected_option_id": row.selected_option_id if row else None,
+                "awarded_marks": (
+                    row.teacher_override_marks if row and row.teacher_override_marks is not None
+                    else row.awarded_marks if row else None
+                ),
+                "feedback": (
+                    row.teacher_review_note if row and row.teacher_review_note
+                    else (evaluation.get("feedback") or evaluation.get("summary")) if isinstance(evaluation, dict)
+                    else None
+                ),
+                "matched_concepts": matched,
+                "missing_concepts": missing,
+                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
+                "evaluation_status": row.evaluation_status if row else None,
+            })
+        rows = list(answer_map.values())
+        suggested = sum(
+            float(row.teacher_override_marks if row.teacher_override_marks is not None else row.awarded_marks)
+            for row in rows
+        ) if rows else None
+        saved_marks = submission.marks if submission else None
+        percentage_basis = saved_marks if saved_marks is not None else suggested
+        percentage = round((percentage_basis / maximum) * 100, 1) if percentage_basis is not None and maximum > 0 else None
+        teacher_has_reviewed_all = bool(rows) and all(row.review_status in {"reviewed", "published"} for row in rows)
+        needs_review = bool(submission and (
+            any(
+                (row.review_status in {"needs_review", "evaluation_failed"} or row.evaluation_status == "evaluation_failed")
+                and row.review_status not in {"reviewed", "published"}
+                for row in rows
+            )
+            or (rows and percentage is not None and percentage < threshold and not teacher_has_reviewed_all)
+        ))
+        if not submission:
+            review_status = "not_submitted"
+        elif submission.marks_published:
+            review_status = "published"
+        elif needs_review:
+            review_status = "needs_review"
+        elif rows and all(row.review_status in {"reviewed", "published"} for row in rows):
+            review_status = "teacher_reviewed"
+        elif rows and any(row.review_status in {"ai_evaluated", "auto_finalized"} for row in rows):
+            review_status = "ai_evaluated"
+        elif saved_marks is not None:
+            review_status = "awaiting_publication"
+        else:
+            review_status = "awaiting_grading"
+        students.append({
+            "student_id": student_id,
+            "student_name": student_name,
+            "student_email": email,
+            "submission_id": submission.id if submission else None,
+            "answer": submission.answer if submission else None,
+            "file_id": str(submission_files[submission.id]["_id"]) if submission and submission.id in submission_files else None,
+            "file_name": submission_files[submission.id].get("filename", "") if submission and submission.id in submission_files else None,
+            "submission_status": "submitted" if submission else "not_submitted",
+            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
+            "grading_status": review_status,
+            "review_status": review_status,
+            "marks_status": "published" if submission and submission.marks_published else ("awaiting_publication" if saved_marks is not None else ("awaiting_grading" if submission else "not_submitted")),
+            "saved_marks": saved_marks,
+            "suggested_marks": round(suggested, 2) if suggested is not None else None,
+            "total_marks": saved_marks if submission and submission.marks_published else None,
+            "max_marks": maximum,
+            "percentage": percentage if submission and submission.marks_published else None,
+            "needs_review": needs_review,
+            "questions": question_report,
+        })
+
+    def count_status(*statuses):
+        return sum(1 for item in students if item["review_status"] in statuses)
+        submission = submission_by_student.get(student_id)
+        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
+        question_report = []
+        for question in questions:
+            row = answer_map.get(question.id)
+            evaluation = None
+            if row and row.rubric_evaluation:
+                try:
+                    evaluation = json.loads(row.rubric_evaluation)
+                except (TypeError, ValueError):
+                    evaluation = None
+            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
+            matched = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("matched_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            missing = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("missing_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            question_report.append({
+                "question_id": question.id,
+                "question": question.question_text,
+                "reference_answer": question.reference_answer,
+                "max_marks": question.max_marks,
+                "student_answer": row.student_answer if row else None,
+                "selected_option_id": row.selected_option_id if row else None,
+                "awarded_marks": (
+                    row.teacher_override_marks if row and row.teacher_override_marks is not None
+                    else row.awarded_marks if row else None
+                ),
+                "feedback": (
+                    row.teacher_review_note if row and row.teacher_review_note
+                    else evaluation.get("feedback") or evaluation.get("summary") if isinstance(evaluation, dict)
+                    else None
+                ),
+                "matched_concepts": matched,
+                "missing_concepts": missing,
+                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
+                "evaluation_status": row.evaluation_status if row else None,
+            })
+        marks = submission.marks if submission else None
+        students.append({
+            "student_id": student_id,
+            "student_name": student_name,
+            "student_email": email,
+            "submission_status": "submitted" if submission else "not_submitted",
+            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
+            "grading_status": "not_submitted" if not submission else ("graded" if marks is not None else "awaiting_grading"),
+            "marks_status": "available" if marks is not None else "not_available",
+            "total_marks": marks,
+            "max_marks": maximum,
+            "percentage": round((marks / maximum) * 100, 1) if marks is not None and maximum else None,
+            "questions": question_report,
+        })
+
+    report = {
+        "assignment": {"id": assignment.id, "title": assignment.title, "course_id": assignment.course_id},
+        "enrolled_students": len(enrolled),
+        "submitted_students": sum(1 for item in students if item["submission_status"] == "submitted"),
+        "not_submitted_students": sum(1 for item in students if item["submission_status"] == "not_submitted"),
+        "awaiting_grading": count_status("awaiting_grading"),
+        "ai_evaluated": count_status("ai_evaluated"),
+        "needs_review": count_status("needs_review"),
+        "teacher_reviewed": count_status("teacher_reviewed"),
+        "published": count_status("published"),
+        "evaluation_failures": sum(1 for item in students if any(q["evaluation_status"] == "evaluation_failed" for q in item["questions"])),
+        "low_score_threshold_percent": threshold,
+        "students": students,
+    }
+    if response_format == "json":
+        return report
+
+    import csv
+    from io import StringIO
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=[
+        "assignment_id", "assignment_title", "student_id", "student_name", "student_email",
+        "submission_status", "submitted_at", "grading_status", "review_status", "marks_status",
+        "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review", "question_details",
+    ])
+    writer.writeheader()
+    for student in students:
+        writer.writerow({
+            "assignment_id": assignment.id,
+            "assignment_title": assignment.title,
+            **{key: student[key] for key in (
+                "student_id", "student_name", "student_email", "submission_status",
+                "submitted_at", "grading_status", "review_status", "marks_status",
+                "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review",
+            )},
+            "question_details": json.dumps(student["questions"], ensure_ascii=False),
+        })
+    filename = f"assessment-{assignment.id}-report.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @app.get("/teacher/submissions")
 def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Session = Depends(get_db)):
@@ -870,29 +1301,67 @@ def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Sess
     return build_submission_payloads(subs, db)
 
 @app.put("/submissions/{submission_id}/marks")
-def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Session = Depends(get_db)):
+def give_marks(submission_id: int, marks: float, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id, Assignment.teacher_id == user["id"]).first()
     if not assignment:
         raise HTTPException(status_code=403, detail="You can only grade your own assessments")
-    if marks < 0:
-        raise HTTPException(status_code=400, detail="Marks cannot be negative")
-    submission.marks = marks
+    from models import StudentQuestionAnswer
+    rows = db.query(StudentQuestionAnswer).filter(StudentQuestionAnswer.submission_id == submission.id).all()
+    maximum = sum(row.max_marks for row in rows) if rows else 100
+    if marks < 0 or marks > maximum:
+        raise HTTPException(status_code=400, detail=f"Marks must be between 0 and the maximum ({maximum})")
+    submission.marks = round(float(marks), 2)
+    submission.marks_published = False
+    submission.graded_by = user["id"]
+    submission.graded_at = get_now()
     db.commit()
-    notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
-    record_audit(db, user["id"], "grading_completed", "submission", submission.id, {"assignment_id": assignment.id, "marks": marks})
-    return {"message": "Marks updated", "submission_id": submission.id, "marks": marks}
+    record_audit(db, user["id"], "grading_saved_unpublished", "submission", submission.id, {"assignment_id": assignment.id, "marks": marks, "max_marks": maximum})
+    return {"message": "Marks saved. Publish the result when review is complete.", "submission_id": submission.id, "marks": marks, "marks_published": False}
+
+@app.post("/submissions/{submission_id}/publish")
+def publish_submission(submission_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+    submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if user["role"] == "teacher" and assignment.teacher_id != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only publish results for your own assessments")
+    if submission.marks is None:
+        raise HTTPException(status_code=409, detail="Save a final mark before publishing")
+    from models import StudentQuestionAnswer
+    rows = db.query(StudentQuestionAnswer).filter(StudentQuestionAnswer.submission_id == submission.id).all()
+    if rows and any(row.review_status not in {"reviewed", "published"} for row in rows):
+        raise HTTPException(status_code=409, detail="Review every question before publishing this result")
+    if not submission.marks_published:
+        submission.marks_published = True
+        db.commit()
+        notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
+        record_audit(db, user["id"], "grading_published", "submission", submission.id, {"assignment_id": assignment.id, "marks": submission.marks})
+    return {"message": "Marks published", "submission_id": submission.id, "marks": submission.marks, "marks_published": True}
 
 @app.get("/my-marks")
 def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
-    return build_submission_payloads(subs, db)
+    results = build_submission_payloads(subs, db)
+    for item, submission in zip(results, subs):
+        if not submission.marks_published:
+            item["marks"] = None
+            item["marks_status"] = "awaiting_publication" if submission.marks is not None else "awaiting_grading"
+        else:
+            item["marks_status"] = "published"
+            item["percentage"] = round((submission.marks / item["max_marks"]) * 100, 1) if submission.marks is not None and item.get("max_marks") else None
+    return results
 
 @app.post("/courses/{course_id}/resources/batch")
 async def add_resources_batch(course_id: int, background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), titles: list[str] | None = Form(None), user=Depends(get_user), db: Session = Depends(get_db)):

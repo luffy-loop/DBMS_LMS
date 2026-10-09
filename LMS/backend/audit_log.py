@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -7,14 +8,26 @@ from database import get_db
 from models import AuditLog, User
 
 router = APIRouter(prefix="/admin/audit-logs", tags=["audit"])
+logger = logging.getLogger("lms.audit")
 
-def record_audit(db: Session, user_id, action, entity_type=None, entity_id=None, details=None):
+
+def record_audit(db: Session, user_id, action, entity_type=None, entity_id=None, details=None, *, raise_on_error=False):
     try:
         payload = json.dumps(details, separators=(",", ":")) if isinstance(details, (dict, list)) else (str(details)[:2000] if details is not None else None)
         db.add(AuditLog(user_id=int(user_id) if user_id is not None else None, action=action[:80], entity_type=entity_type[:40] if entity_type else None, entity_id=str(entity_id)[:100] if entity_id is not None else None, details=payload, created_at=datetime.utcnow()))
         db.commit()
-    except Exception:
-        db.rollback()
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error(json.dumps({
+            "event": "audit_persistence_failed",
+            "action": action[:80],
+            "error_type": type(exc).__name__,
+        }, separators=(",", ":")))
+        if raise_on_error:
+            raise
 
 @router.get("")
 def list_audit_logs(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100), action: str | None = None, user_id: int | None = None, user=Depends(get_user), db: Session = Depends(get_db)):

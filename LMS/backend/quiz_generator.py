@@ -59,6 +59,23 @@ def generate_quiz(data: QuizGenerateRequest, background_tasks: BackgroundTasks, 
     if user["role"] not in {"student", "teacher", "admin"}:
         raise HTTPException(status_code=403, detail="Access denied")
     course = _can_access_course(user, data.course_id, db)
+    stale_before = datetime.utcnow() - timedelta(minutes=5)
+    db.query(AIJob).filter(
+        AIJob.job_type == "quiz",
+        AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"}),
+        AIJob.updated_at < stale_before,
+    ).update(
+        {
+            "status": "FAILED",
+            "error": json.dumps({
+                "error": "JOB_STALE",
+                "message": "Generation stopped updating after a process interruption. Retry the request.",
+            }),
+            "updated_at": datetime.utcnow(),
+        },
+        synchronize_session=False,
+    )
+    db.commit()
     active = db.query(AIJob).filter(AIJob.user_id == user["id"], AIJob.course_id == course.id, AIJob.job_type == "quiz", AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"})).order_by(AIJob.created_at.desc()).first()
     if active:
         return {"job_id": active.job_id, "status": active.status, "reused": True}
@@ -99,7 +116,11 @@ def cancel_quiz_job(job_id: str, user=Depends(get_user), db: Session = Depends(g
 def create_assignment_from_quiz(job_id: str, data: QuizAssignmentRequest, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    job = db.query(AIJob).filter(AIJob.job_id == job_id, AIJob.user_id == user["id"], AIJob.job_type == "quiz").first()
+    job = db.query(AIJob).filter(
+        AIJob.job_id == job_id,
+        AIJob.user_id == user["id"],
+        AIJob.job_type == "quiz",
+    ).with_for_update().first()
     if not job:
         raise HTTPException(status_code=404, detail="Quiz job not found")
     if job.status != "COMPLETED" or not job.result:
@@ -149,8 +170,8 @@ def create_assignment_from_quiz(job_id: str, data: QuizAssignmentRequest, user=D
                 aq.correct_option_id=row.id
         if aq.correct_option_id is None:
             raise HTTPException(status_code=422, detail="A question is missing its correct option")
-    student_ids=[row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id==course.id).all()]
-    notify_users(db,student_ids,"assignment_created","New assignment",assignment.title+" is now available in "+course.title+".","assignment",assignment.id)
     job.assignment_id=assignment.id
     db.commit()
+    student_ids=[row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id==course.id).all()]
+    notify_users(db,student_ids,"assignment_created","New assignment",assignment.title+" is now available in "+course.title+".","assignment",assignment.id)
     return {"message":"Assignment published","assignment_id":assignment.id,"course_id":course.id}

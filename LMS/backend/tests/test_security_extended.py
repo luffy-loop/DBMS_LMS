@@ -150,3 +150,24 @@ def test_student_cannot_download_another_students_submission():
         for table in (Submission.__table__, Assignment.__table__, Course.__table__, User.__table__):
             table.drop(engine)
         engine.dispose()
+
+
+def test_low_score_threshold_is_strictly_below_25_percent():
+    from exam_evaluation import is_low_score
+    assert is_low_score(24.99, 100)
+    assert not is_low_score(25, 100)
+    assert not is_low_score(30, 100)
+    assert not is_low_score(0, 0)
+
+
+def test_ordinary_assignment_duration_does_not_override_due_date():
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+    from main import assessment_deadline
+    start = datetime(2026, 10, 9, 10, 0)
+    due = start + timedelta(days=2)
+    assignment = SimpleNamespace(type="assignment", start_time=start, end_time=due, duration_minutes=30)
+    assert assessment_deadline(assignment) == due
+    exam = SimpleNamespace(type="exam", start_time=start, end_time=due, duration_minutes=30)
+    assert assessment_deadline(exam) == start + timedelta(minutes=30)
+

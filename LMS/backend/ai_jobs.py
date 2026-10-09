@@ -21,11 +21,22 @@ def create_job(db, user_id, course_id, job_type, payload):
 
 
 def set_job(db, job, status, result=None, error=None):
-    job.status=status
-    job.updated_at=datetime.utcnow()
-    if result is not None: job.result=json.dumps(result)
-    if error is not None: job.error=json.dumps(error) if isinstance(error,dict) else str(error)[:2000]
+    values = {"status": status, "updated_at": datetime.utcnow()}
+    if result is not None:
+        values["result"] = json.dumps(result)
+    if error is not None:
+        values["error"] = json.dumps(error) if isinstance(error, dict) else str(error)[:2000]
+
+    query = db.query(AIJob).filter(AIJob.id == job.id)
+    if status != "CANCELLED":
+        query = query.filter(AIJob.status.notin_({"CANCELLED", "COMPLETED", "FAILED"}))
+    changed = query.update(values, synchronize_session=False)
+    if not changed:
+        db.rollback()
+        return False
     db.commit()
+    db.refresh(job)
+    return True
 
 
 def _timed_search(query, course_id):
@@ -80,24 +91,112 @@ def run_quiz_job(job_id):
         db.close()
 
 
-def _generate_grounded_questions(results,count):
+def _generate_grounded_questions(results, count):
+    """Create deterministic, source-grounded concept-identification questions.
+
+    This is a local template-based fallback, not an LLM. It fails closed when
+    the source does not contain enough distinct concepts for defensible options.
+    """
     import re
-    count=max(1,min(10,count))
-    clean=[];seen=set()
+
+    count = max(1, min(10, int(count)))
+    patterns = (
+        re.compile(
+            r"^\s*(?:(?:a|an|the)\s+)?"
+            r"(?P<term>[A-Za-z][A-Za-z0-9/&() -]{1,70}?)\s+"
+            r"(?:is|are|means|refers to|can be defined as|is defined as)\s+"
+            r"(?P<definition>.+?)\s*[.!?]?\s*$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^\s*(?P<term>[A-Za-z][A-Za-z0-9/&() -]{1,70}?)\s*:\s*"
+            r"(?P<definition>.+?)\s*[.!?]?\s*$"
+        ),
+        re.compile(
+            r"^\s*(?P<term>[A-Za-z][A-Za-z0-9/&() -]{1,70}?)\s+[—–-]\s+"
+            r"(?P<definition>.+?)\s*[.!?]?\s*$"
+        ),
+    )
+    concepts = []
+    seen_terms = set()
+    seen_sentences = set()
     for result in results:
-        title=" ".join(str(result.get("title") or "Course material").split())
-        sentences=[x.strip() for x in re.split(r"(?<=[.!?])\s+",str(result.get("content") or "")) if len(x.split())>=8]
-        for sentence in sentences:
-            sentence=sentence[:700].strip()
-            key=sentence.lower()
-            if key not in seen:
-                clean.append((title,sentence));seen.add(key)
-            if len(clean)>=count: break
-        if len(clean)>=count: break
-    if len(clean)<2:return []
-    questions=[]
-    option_count=min(4,len(clean))
-    for i,(title,sentence) in enumerate(clean[:count],1):
-        options=[clean[(i-1+j)%len(clean)][1] for j in range(option_count)]
-        questions.append({"id":i,"question":"Which statement is supported by the selected course material?","context":sentence,"options":options,"answer":sentence,"source":title,"question_type":"mcq","max_marks":1,"explanation":"This statement is quoted from processed course material."})
+        title = " ".join(str(result.get("title") or "Course material").split())[:200]
+        content = str(result.get("content") or "")
+        for raw_sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", content):
+            sentence = " ".join(raw_sentence.split()).strip()
+            if len(sentence.split()) < 8 or len(sentence) > 700:
+                continue
+            sentence_key = sentence.casefold()
+            if sentence_key in seen_sentences:
+                continue
+            match = next((pattern.match(sentence) for pattern in patterns if pattern.match(sentence)), None)
+            if not match:
+                continue
+            term = re.sub(r"^(?:a|an|the)\s+", "", match.group("term").strip(), flags=re.IGNORECASE)
+            definition = match.group("definition").strip(" .,:;—–-")
+            term = " ".join(term.split()).strip(" .,:;—–-")
+            term_words = term.split()
+            definition_words = definition.split()
+            if not term or len(term_words) > 6 or len(definition_words) < 5:
+                continue
+            if len(term) > 70 or len(definition) < 20 or len(definition) > 600:
+                continue
+            term_key = term.casefold()
+            if term_key in seen_terms or term_key in definition.casefold():
+                continue
+            if len(set(re.findall(r"[a-z]{3,}", definition.casefold()))) < 4:
+                continue
+            concepts.append({
+                "term": term,
+                "definition": definition,
+                "sentence": sentence,
+                "source": title,
+            })
+            seen_terms.add(term_key)
+            seen_sentences.add(sentence_key)
+
+    if len(concepts) < 4:
+        return []
+
+    questions = []
+    for item in concepts:
+        correct_tokens = set(re.findall(r"[a-z]{3,}", item["definition"].casefold()))
+        ranked = []
+        for other in concepts:
+            if other["term"].casefold() == item["term"].casefold():
+                continue
+            other_tokens = set(re.findall(r"[a-z]{3,}", other["definition"].casefold()))
+            union = correct_tokens | other_tokens
+            overlap = len(correct_tokens & other_tokens) / max(1, len(union))
+            if overlap < 0.8:
+                ranked.append((overlap, other))
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        distractors = []
+        seen_options = {item["term"].casefold()}
+        for _, other in ranked:
+            key = other["term"].casefold()
+            if key not in seen_options:
+                distractors.append(other)
+                seen_options.add(key)
+            if len(distractors) == 3:
+                break
+        if len(distractors) < 3:
+            continue
+        options = [item["term"]] + [other["term"] for other in distractors]
+        if len({option.casefold() for option in options}) != 4:
+            continue
+        questions.append({
+            "id": len(questions) + 1,
+            "question": "Which concept matches this description: " + item["definition"].rstrip(".!?") + "?",
+            "context": "Source material: " + item["source"],
+            "options": options,
+            "answer": item["term"],
+            "source": item["source"],
+            "question_type": "mcq",
+            "max_marks": 1,
+            "explanation": "The selected course material describes " + item["term"] + " as: " + item["definition"],
+        })
+        if len(questions) >= count:
+            break
     return questions
