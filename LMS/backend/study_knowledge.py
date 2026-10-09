@@ -25,13 +25,30 @@ KNOWLEDGE = [
     {"topic":"HTTP","aliases":["http","hypertext transfer protocol"],"answer":"HTTP is an application-layer protocol used for communication between clients and servers. Requests contain a method and resource target, and responses contain a status code and data.","bullets":["GET commonly retrieves data","POST commonly creates or triggers server-side work","Status codes communicate the result"],"terms":["request","response","status code"],"tip":"Think of HTTP as the request-response language used by web applications."},
     {"topic":"REST API","aliases":["rest api","restful api","api"],"answer":"A REST API exposes resources through HTTP endpoints and uses standard HTTP methods and status codes to communicate operations and results.","bullets":["Resources are represented by URLs","HTTP methods express common operations","Stateless requests carry the context needed by the server"],"terms":["resource","HTTP","endpoint","stateless"],"tip":"A clean REST API has predictable resource URLs and meaningful HTTP methods and status codes."},
     {"topic":"Overfitting and Underfitting","aliases":["underfitting","overfitting vs underfitting","bias variance"],"answer":"Underfitting means a model is too simple to capture useful patterns, while overfitting means it learns the training data too closely and generalizes poorly.","bullets":["Underfitting often has poor training and test performance","Overfitting can have excellent training performance but poor test performance","Model complexity, regularization and data affect the balance"],"terms":["generalization","model complexity","regularization"],"tip":"Compare training and unseen-data performance to diagnose the problem."},
-    {"topic":"Dynamic Programming","aliases":["dynamic programming","dp","memoization","tabulation"],"answer":"Dynamic programming solves problems with overlapping subproblems and useful substructure by storing results so the same work is not repeated.","bullets":["Memoization stores results during recursive computation","Tabulation builds results iteratively","A good state definition is central to a DP solution"],"terms":["state","transition","memoization","tabulation"],"tip":"Ask: what is the state, what is the transition, and what are the base cases?"}
-
+    {"topic":"Dynamic Programming","aliases":["dynamic programming","dp","memoization","tabulation"],"answer":"Dynamic programming solves problems with overlapping subproblems and useful substructure by storing results so the same work is not repeated.","bullets":["Memoization stores results during recursive computation","Tabulation builds results iteratively","A good state definition is central to a DP solution"],"terms":["state","transition","memoization","tabulation"],"tip":"Ask: what is the state, what is the transition, and what are the base cases?"},
+    {"topic":"Mutex Locks","aliases":["mutex","mutex lock","mutex locks","mutual exclusion lock","mutual exclusion locks","mutual exclusion"],"answer":"A mutex (mutual-exclusion) lock is a synchronization mechanism that allows only one thread or process at a time to enter a protected critical section. A thread must acquire the lock before accessing shared data and release it when finished. Other threads wait while the lock is held, preventing race conditions when the lock is used consistently.","bullets":["Acquire the lock before entering the critical section","Only one thread can hold a given mutex at a time","Release the lock after the protected operation","Mutexes help prevent race conditions when protecting shared data"],"terms":["mutual exclusion","critical section","acquire","release","race condition"],"tip":"Example: lock a shared bank-account balance before updating it, then unlock it so another thread can safely update it."},
+    {"topic":"Semaphores","aliases":["semaphore","semaphores","counting semaphore","binary semaphore"],"answer":"A semaphore is a synchronization primitive that uses an integer counter and atomic wait/signal operations to coordinate access to shared resources. A binary semaphore has two states, while a counting semaphore can represent multiple available resource units.","bullets":["wait (P/down) decrements or blocks when no permit is available","signal (V/up) releases a permit and may wake a waiting thread","A counting semaphore can control access to a pool of resources","A mutex is generally used for exclusive ownership; semaphore semantics depend on the design"],"terms":["wait","signal","counter","binary semaphore","counting semaphore"],"tip":"Use a counting semaphore initialized to the number of available identical resources to limit concurrent access."},
 ]
 
+def _normalize(text):
+    import re
+    return " ".join(re.findall(r"[a-z0-9]+", (text or "").casefold()))
+
 def find_knowledge(text):
-    q = (text or "").lower().strip()
+    query = _normalize(text)
+    if not query:
+        return None
+    query_tokens = query.split()
+    matches = []
     for item in KNOWLEDGE:
-        if any(alias in q for alias in item["aliases"]):
-            return item
-    return None
+        for alias in item["aliases"]:
+            phrase = _normalize(alias)
+            if not phrase:
+                continue
+            alias_tokens = phrase.split()
+            width = len(alias_tokens)
+            if any(query_tokens[i:i + width] == alias_tokens for i in range(len(query_tokens) - width + 1)):
+                matches.append((width, len(phrase), item))
+    if not matches:
+        return None
+    return max(matches, key=lambda match: (match[0], match[1]))[2]
