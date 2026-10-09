@@ -77,10 +77,11 @@ cors_origins = [
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    request.state.request_id = request_id
     start_time = time.perf_counter()
     response = await call_next(request)
     process_time = time.perf_counter() - start_time
-    request_id = request.headers.get("X-Request-ID") or uuid4().hex
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{process_time * 1000:.2f}ms"
     log_event = {
@@ -193,29 +194,102 @@ async def register(data: Register, db: Session = Depends(get_db)):
     return {"message": "User registered successfully", "id": user.id, "role": user.role}
 
 @app.post("/login")
-async def login(data: Login, db: Session = Depends(get_db)):
-    t0 = time.perf_counter()
-    user = db.query(User).filter(User.email == data.roll_no).first()
-    stored_hash = user.password if user else LOGIN_DUMMY_HASH
-    valid = await asyncio.to_thread(pwd.verify, data.password, stored_hash)
-    if not user or not valid:
-        raise HTTPException(status_code=401, detail="Invalid roll number or password")
-    token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
-    record_audit(db, user.id, "login", "user", user.id, {"role": user.role})
-    dur = (time.perf_counter() - t0) * 1000
-    logger.info(f"[AUTH] Login for user={user.id} ({user.role}) took {dur:.2f}ms")
-    return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+def login(data: Login, request: Request, db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    timings = {}
+    status = "database_failure"
+
+    try:
+        acquire_started = time.perf_counter()
+        try:
+            db.connection()
+        finally:
+            timings["db_connection_acquire_ms"] = round((time.perf_counter() - acquire_started) * 1000, 2)
+
+        query_started = time.perf_counter()
+        user = db.query(User).filter(User.email == data.roll_no).first()
+        timings["user_query_ms"] = round((time.perf_counter() - query_started) * 1000, 2)
+
+        password_started = time.perf_counter()
+        stored_hash = user.password if user else LOGIN_DUMMY_HASH
+        valid = pwd.verify(data.password, stored_hash)
+        timings["password_verification_ms"] = round((time.perf_counter() - password_started) * 1000, 2)
+        if not user or not valid:
+            status = "invalid_credentials"
+            raise HTTPException(status_code=401, detail="Invalid roll number or password")
+
+        jwt_started = time.perf_counter()
+        token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
+        timings["jwt_generation_ms"] = round((time.perf_counter() - jwt_started) * 1000, 2)
+
+        audit_started = time.perf_counter()
+        try:
+            record_audit(db, user.id, "login", "user", user.id, {"role": user.role}, raise_on_error=True)
+        except Exception:
+            timings["audit_persistence_ms"] = round((time.perf_counter() - audit_started) * 1000, 2)
+            status = "audit_persistence_failure"
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "AUDIT_UNAVAILABLE",
+                    "message": "Login could not be completed because the security audit could not be persisted. Please retry.",
+                },
+            )
+        timings["audit_persistence_ms"] = round((time.perf_counter() - audit_started) * 1000, 2)
+        status = "success"
+        return {"message": "Login successful", "token": token, "id": user.id, "name": user.name, "role": user.role}
+    except SQLAlchemyError:
+        status = "database_failure"
+        raise
+    except HTTPException:
+        if status == "database_failure" and "user_query_ms" in timings:
+            status = "request_rejected"
+        raise
+    finally:
+        timings["total_login_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        logger.info(json.dumps({
+            "event": "login_timing",
+            "request_id": getattr(request.state, "request_id", None),
+            "status": status,
+            "timings_ms": timings,
+        }, separators=(",", ":")))
 
 @app.get("/auth/session")
-def auth_session(user=Depends(get_user), db: Session = Depends(get_db)):
+def auth_session(request: Request, user=Depends(get_user), db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    acquire_started = time.perf_counter()
+    db.connection()
+    acquire_ms = round((time.perf_counter() - acquire_started) * 1000, 2)
+    query_started = time.perf_counter()
     account = db.query(User).filter(User.id == user["id"]).first()
+    query_ms = round((time.perf_counter() - query_started) * 1000, 2)
     if not account:
+        logger.info(json.dumps({
+            "event": "auth_session_timing",
+            "request_id": getattr(request.state, "request_id", None),
+            "status": "account_missing",
+            "db_connection_acquire_ms": acquire_ms,
+            "user_query_ms": query_ms,
+            "total_ms": round((time.perf_counter() - started) * 1000, 2),
+        }, separators=(",", ":")))
         raise HTTPException(status_code=401, detail="Account no longer exists")
+    logger.info(json.dumps({
+        "event": "auth_session_timing",
+        "request_id": getattr(request.state, "request_id", None),
+        "status": "success",
+        "db_connection_acquire_ms": acquire_ms,
+        "user_query_ms": query_ms,
+        "total_ms": round((time.perf_counter() - started) * 1000, 2),
+    }, separators=(",", ":")))
     return {"id": account.id, "name": account.name, "role": account.role}
 
 @app.get("/profile")
-def profile(user=Depends(get_user), db: Session = Depends(get_db)):
-    t0 = time.perf_counter()
+def profile(request: Request, user=Depends(get_user), db: Session = Depends(get_db)):
+    started = time.perf_counter()
+    acquire_started = time.perf_counter()
+    db.connection()
+    acquire_ms = round((time.perf_counter() - acquire_started) * 1000, 2)
+    profile_work_started = time.perf_counter()
     account = db.query(User).filter(User.id == user["id"]).first()
     if not account:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -244,6 +318,14 @@ def profile(user=Depends(get_user), db: Session = Depends(get_db)):
             c_title = course_map.get(a.course_id, "Course")
             upcoming.append({"id": a.id, "title": a.title, "type": a.type, "course": c_title, "start_time": format_iso(a.start_time), "deadline": format_iso(deadline)})
     upcoming.sort(key=lambda x: x["deadline"])
+    logger.info(json.dumps({
+        "event": "profile_timing",
+        "request_id": getattr(request.state, "request_id", None),
+        "status": "success",
+        "db_connection_acquire_ms": acquire_ms,
+        "profile_queries_and_projection_ms": round((time.perf_counter() - profile_work_started) * 1000, 2),
+        "total_ms": round((time.perf_counter() - started) * 1000, 2),
+    }, separators=(",", ":")))
     return {"id": account.id, "name": account.name, "email": account.email, "role": account.role, "section": account.section or "Unassigned", "courses": [{"id": c.id, "title": c.title, "description": c.description} for c in course_rows], "upcoming": upcoming[:6]}
 
 @app.get("/student")

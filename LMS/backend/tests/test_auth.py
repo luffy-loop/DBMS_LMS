@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from auth import alg, get_user, key
 from database import get_db
 from main import app, pwd
-from models import User
+from models import AuditLog, User
 
 
 def test_missing_token_is_rejected():
@@ -87,6 +87,7 @@ def test_login_success_and_failure():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     User.__table__.create(engine)
+    AuditLog.__table__.create(engine)
     db = TestingSession()
     db.add(User(name="Test", email="TEST001", password=pwd.hash("correct"), role="student", section="A1"))
     db.commit()
@@ -99,14 +100,23 @@ def test_login_success_and_failure():
         with TestClient(app) as client:
             success = client.post("/login", json={"roll_no": "TEST001", "password": "correct"})
             failure = client.post("/login", json={"roll_no": "TEST001", "password": "wrong"})
+            missing = client.post("/login", json={"roll_no": "MISSING001", "password": "wrong"})
         assert success.status_code == 200
         assert success.json()["role"] == "student"
         assert success.json()["token"]
+        claims = jwt.decode(success.json()["token"], key, algorithms=[alg])
+        assert claims["id"] == success.json()["id"]
+        assert claims["role"] == "student"
         assert failure.status_code == 401
         assert failure.json()["detail"] == "Invalid roll number or password"
+        assert missing.status_code == 401
+        assert missing.json()["detail"] == "Invalid roll number or password"
+        saved_audit = db.query(AuditLog).filter(AuditLog.action == "login").one()
+        assert saved_audit.user_id == success.json()["id"]
     finally:
         app.dependency_overrides.pop(get_db, None)
         db.close()
+        AuditLog.__table__.drop(engine)
         User.__table__.drop(engine)
         engine.dispose()
 
@@ -139,3 +149,53 @@ def test_unauthorized_api_returns_http_error():
         response = client.get("/profile")
     assert response.status_code == 401
     assert response.json()["detail"] == "Authorization token required"
+
+
+def test_login_fails_closed_if_security_audit_cannot_be_persisted(monkeypatch):
+    from main import record_audit
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    User.__table__.create(engine)
+    AuditLog.__table__.create(engine)
+    db = TestingSession()
+    db.add(User(name="Test", email="AUDIT001", password=pwd.hash("correct"), role="student", section="A1"))
+    db.commit()
+
+    def override_db():
+        yield db
+
+    def broken_audit(*args, **kwargs):
+        raise RuntimeError("synthetic audit failure")
+
+    monkeypatch.setattr("main.record_audit", broken_audit)
+    app.dependency_overrides[get_db] = override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post("/login", json={"roll_no": "AUDIT001", "password": "correct"})
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == "AUDIT_UNAVAILABLE"
+        assert "token" not in response.json()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        db.close()
+        AuditLog.__table__.drop(engine)
+        User.__table__.drop(engine)
+        engine.dispose()
+
+
+def test_login_database_failure_returns_service_unavailable():
+    from sqlalchemy.exc import SQLAlchemyError
+
+    def broken_db():
+        raise SQLAlchemyError("synthetic database failure")
+        yield
+
+    app.dependency_overrides[get_db] = broken_db
+    try:
+        with TestClient(app) as client:
+            response = client.post("/login", json={"roll_no": "ANY001", "password": "correct"})
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == "DATABASE_UNAVAILABLE"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
