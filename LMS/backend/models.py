@@ -48,8 +48,12 @@ class Submission(Base):
     assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=False, index=True)
     student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     answer = Column(String, nullable=False)
-    marks = Column(Integer, nullable=True)
+    marks = Column(Float, nullable=True)
     created_at = Column(DateTime, nullable=True, default=datetime.utcnow)
+    marks_published = Column(Boolean, nullable=False, default=False)
+    teacher_review_note = Column(String, nullable=True)
+    graded_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    graded_at = Column(DateTime, nullable=True)
     __table_args__ = (UniqueConstraint("assignment_id", "student_id", name="uq_submission_assignment_student"),)
 
 class AssessmentQuestion(Base):

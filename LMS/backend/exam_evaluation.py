@@ -16,6 +16,7 @@ from schemas import (
     TeacherReviewRequest, QuestionReviewItem
 )
 from auth import get_user
+from audit_log import record_audit
 import evaluation_service as es
 
 router = APIRouter(prefix="", tags=["exam_evaluation"])
@@ -25,12 +26,28 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is not None:
-        return dt.astimezone().replace(tzinfo=None)
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
 
 def get_now() -> datetime:
-    return datetime.now()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def low_score_threshold() -> float:
+    import os
+    try:
+        value = float(os.getenv("LOW_SCORE_REVIEW_THRESHOLD_PERCENT", "25"))
+    except (TypeError, ValueError):
+        value = 25.0
+    return min(100.0, max(0.0, value))
+
+
+def is_low_score(awarded: float, maximum: float, threshold: float | None = None) -> bool:
+    if maximum <= 0:
+        return False
+    limit = low_score_threshold() if threshold is None else min(100.0, max(0.0, float(threshold)))
+    return (float(awarded) / float(maximum)) * 100 < limit
 
 
 get_utc_now = get_now
@@ -42,7 +59,7 @@ def _assessment_deadline(assignment: Assignment):
     start = normalize_datetime(assignment.start_time)
     if end:
         deadlines.append(end)
-    if start and assignment.duration_minutes:
+    if start and assignment.duration_minutes and assignment.type in {"test", "exam"}:
         deadlines.append(start + timedelta(minutes=assignment.duration_minutes))
     return min(deadlines) if deadlines else None
 
@@ -488,7 +505,7 @@ def evaluate_and_record_exam(
                     evaluated_at=now,
                     evaluator_version="deterministic-mcq",
                     evaluator_confidence=1.0,
-                    review_status="auto_finalized"
+                    review_status="ai_evaluated"
                 )
                 db.add(sqa)
                 recorded_answers.append(sqa)
@@ -535,48 +552,96 @@ def evaluate_and_record_exam(
                     db.add(sqa)
                     recorded_answers.append(sqa)
                 else:
-                    # Generate 384-dimensional vector embedding for student answer
-                    stu_vec = es.generate_embedding(clean_ans)
-
-                    # Ensure reference embedding exists in question record
-                    if not q.reference_embedding and q.reference_answer:
-                        q.reference_embedding = es.generate_embedding(q.reference_answer)
-                        db.add(q)
-                        db.flush()
-
-                    ref_vec = list(q.reference_embedding) if q.reference_embedding else None
-
-                    # Hybrid evaluation combining pgvector similarity + rubric criteria + NLI + contradiction check
-                    awarded_marks, sim, eval_dict = es.evaluate_hybrid_descriptive(
-                        db, clean_ans, q.max_marks, q.reference_answer, ref_vec, rubrics
-                    )
-
-                    sqa = StudentQuestionAnswer(
-                        submission_id=submission.id,
-                        question_id=q.id,
-                        student_id=student_id,
-                        question_type="descriptive",
-                        student_answer=clean_ans,
-                        reference_answer=None,
-                        student_embedding=stu_vec,
-                        similarity_score=sim,
-                        awarded_marks=awarded_marks,
-                        max_marks=q.max_marks,
-                        evaluation_status="evaluated",
-                        evaluated_at=now,
-                        evaluator_version="hybrid-v2-nli",
-                        evaluator_confidence=eval_dict.get("evaluator_confidence", 0.85),
-                        review_status=eval_dict.get("review_status", "auto_finalized"),
-                        rubric_evaluation=json.dumps(eval_dict)
-                    )
+                    try:
+                        if not q.reference_answer or len(q.reference_answer.strip().split()) < 2:
+                            raise ValueError("reference_answer_missing")
+                        stu_vec = es.generate_embedding(clean_ans)
+                        if not q.reference_embedding:
+                            q.reference_embedding = es.generate_embedding(q.reference_answer)
+                            db.add(q)
+                            db.flush()
+                        ref_vec = list(q.reference_embedding) if q.reference_embedding else None
+                        awarded_marks, sim, eval_dict = es.evaluate_hybrid_descriptive(
+                            db, clean_ans, q.max_marks, q.reference_answer, ref_vec, rubrics
+                        )
+                        if not isinstance(eval_dict, dict) or eval_dict.get("fallback_error"):
+                            raise RuntimeError("evaluation_unavailable")
+                        criteria = eval_dict.get("criteria") or []
+                        eval_dict["matched_concepts"] = [
+                            str(item.get("criterion_text")) for item in criteria
+                            if isinstance(item, dict) and item.get("covered") and item.get("criterion_text")
+                        ]
+                        eval_dict["missing_concepts"] = [
+                            str(item.get("criterion_text")) for item in criteria
+                            if isinstance(item, dict) and not item.get("covered") and item.get("criterion_text")
+                        ]
+                        eval_dict["feedback"] = (
+                            "Your answer covers the key ideas."
+                            if not eval_dict["missing_concepts"]
+                            else "Review the missing criteria: " + ", ".join(eval_dict["missing_concepts"][:4]) + "."
+                        )
+                        sqa = StudentQuestionAnswer(
+                            submission_id=submission.id,
+                            question_id=q.id,
+                            student_id=student_id,
+                            question_type="descriptive",
+                            student_answer=clean_ans,
+                            reference_answer=None,
+                            student_embedding=stu_vec,
+                            similarity_score=sim,
+                            awarded_marks=max(0.0, min(float(q.max_marks), float(awarded_marks))),
+                            max_marks=q.max_marks,
+                            evaluation_status="evaluated",
+                            evaluated_at=now,
+                            evaluator_version="hybrid-v2-nli",
+                            evaluator_confidence=eval_dict.get("evaluator_confidence"),
+                            review_status="ai_evaluated",
+                            rubric_evaluation=json.dumps(eval_dict)
+                        )
+                        total_awarded += sqa.awarded_marks
+                    except Exception as exc:
+                        logger = __import__("logging").getLogger("lms.exam_evaluation")
+                        logger.warning("Descriptive evaluation unavailable question_id=%s error_type=%s", q.id, type(exc).__name__)
+                        sqa = StudentQuestionAnswer(
+                            submission_id=submission.id,
+                            question_id=q.id,
+                            student_id=student_id,
+                            question_type="descriptive",
+                            student_answer=clean_ans,
+                            reference_answer=None,
+                            student_embedding=None,
+                            similarity_score=None,
+                            awarded_marks=0.0,
+                            max_marks=q.max_marks,
+                            evaluation_status="evaluation_failed",
+                            evaluated_at=now,
+                            evaluator_version="hybrid-v2-nli",
+                            evaluator_confidence=None,
+                            review_status="needs_review",
+                            rubric_evaluation=json.dumps({
+                                "summary": "Automated evaluation was unavailable. Teacher review is required.",
+                                "feedback": "This answer needs manual review because automated evaluation could not complete.",
+                                "criteria": [],
+                                "matched_concepts": [],
+                                "missing_concepts": [],
+                                "error_type": type(exc).__name__,
+                            })
+                        )
                     db.add(sqa)
                     recorded_answers.append(sqa)
-                    total_awarded += awarded_marks
 
         total_max = sum(q.max_marks for q in questions)
-        rounded_marks = min(total_max, max(0, int(round(total_awarded))))
-        submission.marks = rounded_marks
-        submission.answer = f"Exam auto-evaluated. Total: {rounded_marks}/{total_max}"
+        rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2)
+        failed_evaluation = any(row.evaluation_status == "evaluation_failed" for row in recorded_answers)
+        if total_max > 0 and is_low_score(rounded_marks, total_max):
+            for row in recorded_answers:
+                if row.review_status != "evaluation_failed":
+                    row.review_status = "needs_review"
+        submission.marks = None if failed_evaluation else rounded_marks
+        submission.marks_published = False
+        submission.graded_by = None
+        submission.graded_at = None
+        submission.answer = "Exam submission received."
         db.commit()
         db.refresh(submission)
 
@@ -661,17 +726,18 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
         "message": "Exam submitted and evaluated successfully",
         "submission_id": submission.id,
         "assignment_id": assignment.id,
-        "total_marks": submission.marks,
+        "total_marks": None,
         "max_marks": total_max,
-        "percentage": round((submission.marks / total_max) * 100, 1) if total_max > 0 else 0,
-        "status": "Passed" if (total_max > 0 and (submission.marks / total_max) >= 0.40) else ("Failed" if total_max > 0 else "Completed"),
+        "percentage": None,
+        "status": "awaiting_teacher_review",
+        "marks_published": False,
         "questions": [
             {
                 "question_id": sqa.question_id,
                 "question_text": q_dict.get(sqa.question_id).question_text if q_dict.get(sqa.question_id) else "",
                 "question_type": sqa.question_type,
                 "max_marks": sqa.max_marks,
-                "awarded_marks": sqa.awarded_marks
+                "awarded_marks": None
             }
             for sqa in recorded_answers
         ]
@@ -717,17 +783,18 @@ def get_submission_evaluation(submission_id: int, user=Depends(get_user), db: Se
         return {
             "submission_id": submission.id,
             "assignment_id": submission.assignment_id,
-            "total_marks": submission.marks,
+            "total_marks": submission.marks if submission.marks_published else None,
             "max_marks": total_max,
-            "percentage": round((submission.marks / total_max) * 100, 1) if total_max > 0 else 0,
-            "status": "Passed" if (total_max > 0 and (submission.marks / total_max) >= 0.40) else ("Failed" if total_max > 0 else "Completed"),
+            "percentage": round((submission.marks / total_max) * 100, 1) if submission.marks_published and submission.marks is not None and total_max > 0 else None,
+            "status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_teacher_review"),
+            "marks_published": bool(submission.marks_published),
             "questions": [
                 {
                     "question_id": r.question_id,
                     "question_text": questions.get(r.question_id).question_text if questions.get(r.question_id) else "",
                     "question_type": r.question_type,
                     "max_marks": r.max_marks,
-                    "awarded_marks": r.teacher_override_marks if r.teacher_override_marks is not None else r.awarded_marks
+                    "awarded_marks": (r.teacher_override_marks if r.teacher_override_marks is not None else r.awarded_marks) if submission.marks_published else None
                 }
                 for r in records
             ]
@@ -744,6 +811,9 @@ def get_submission_evaluation(submission_id: int, user=Depends(get_user), db: Se
             "student_id": submission.student_id,
             "total_marks": submission.marks,
             "max_marks": total_max,
+            "marks_published": bool(submission.marks_published),
+            "submission_answer": submission.answer,
+            "teacher_review_note": submission.teacher_review_note,
             "questions": [
                 {
                     "question_id": r.question_id,
@@ -804,23 +874,20 @@ def review_submission(
     ).all()
     records_by_qid = {r.question_id: r for r in records}
 
-    now = datetime.now()
+    now = get_now()
     for item in data.reviews:
         if item.question_id not in records_by_qid:
             raise HTTPException(status_code=400, detail=f"Question {item.question_id} does not belong to this submission")
+        sqa = records_by_qid[item.question_id]
+        if item.override_marks is not None and (item.override_marks < 0.0 or item.override_marks > sqa.max_marks):
+            raise HTTPException(status_code=400, detail=f"Override marks must be between 0 and maximum marks ({sqa.max_marks})")
 
+    for item in data.reviews:
         sqa = records_by_qid[item.question_id]
         if item.override_marks is not None:
-            if item.override_marks < 0.0 or item.override_marks > sqa.max_marks:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Override marks must be between 0 and maximum marks ({sqa.max_marks})"
-                )
             sqa.teacher_override_marks = float(round(item.override_marks, 2))
-
         if item.review_note is not None:
             sqa.teacher_review_note = item.review_note.strip()
-
         sqa.review_status = "reviewed"
         sqa.reviewed_at = now
         sqa.reviewed_by = user["id"]
@@ -831,12 +898,22 @@ def review_submission(
         (r.teacher_override_marks if r.teacher_override_marks is not None else r.awarded_marks)
         for r in records
     )
-    rounded_marks = min(total_max, max(0, int(round(total_awarded))))
+    rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2)
     submission.marks = rounded_marks
-    submission.answer = f"Exam auto-evaluated (Teacher Reviewed). Total: {rounded_marks}/{total_max}"
+    submission.marks_published = False
+    submission.graded_by = user["id"]
+    submission.graded_at = now
+    submission.teacher_review_note = "; ".join(
+        item.review_note.strip() for item in data.reviews if item.review_note and item.review_note.strip()
+    )[:2000] or submission.teacher_review_note
 
     db.commit()
     db.refresh(submission)
+    record_audit(db, user["id"], "assessment_submission_reviewed", "submission", submission.id, {
+        "assignment_id": assignment.id,
+        "total_marks": rounded_marks,
+        "max_marks": total_max,
+    })
 
     return {
         "message": "Submission evaluation reviewed and updated successfully",

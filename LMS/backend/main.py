@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
@@ -463,10 +463,10 @@ async def create_assignment(
     if type not in ["assignment", "test", "exam"]:
         raise HTTPException(status_code=400, detail="Invalid assessment type")
     if start_time and end_time and end_time <= start_time:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
+        raise HTTPException(status_code=400, detail="Due time must be after start time")
     if duration_minutes is not None and duration_minutes <= 0:
         raise HTTPException(status_code=400, detail="Duration must be greater than zero")
-    if duration_minutes and not start_time:
+    if duration_minutes is not None and not start_time:
         raise HTTPException(status_code=400, detail="Start time is required when duration is set")
 
     course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
@@ -518,11 +518,11 @@ def normalize_datetime(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is not None:
-        return dt.astimezone().replace(tzinfo=None)
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
 def get_now() -> datetime:
-    return datetime.now()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 get_utc_now = get_now
 
@@ -571,7 +571,7 @@ def assessment_deadline(assignment):
     start = normalize_datetime(assignment.start_time)
     if end:
         deadlines.append(end)
-    if start and assignment.duration_minutes:
+    if start and assignment.duration_minutes and assignment.type in {"test", "exam"}:
         deadlines.append(start + timedelta(minutes=assignment.duration_minutes))
     return min(deadlines) if deadlines else None
 
@@ -810,7 +810,15 @@ async def submit_assignment(
             }
             for item in answers_list if isinstance(item, dict) and item.get("question_id")
         }
-        submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+        try:
+            submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+        except HTTPException as exc:
+            if exc.status_code == 500 and db.query(Submission.id).filter(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == user["id"],
+            ).first():
+                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+            raise
         if answer.strip():
             submission.answer = f"{answer.strip()} | {submission.answer}"
             db.commit()
@@ -821,7 +829,16 @@ async def submit_assignment(
             answer=answer.strip()
         )
         db.add(submission)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            if db.query(Submission.id).filter(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == user["id"],
+            ).first():
+                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+            raise
         db.refresh(submission)
 
     if file_data:
@@ -878,7 +895,7 @@ async def submit_assignment(
             )
 
     notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
-    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks, "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
+    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
 
 def submission_payload(submission, db: Session | None = None):
     file_doc = None
@@ -921,6 +938,9 @@ def submission_payload(submission, db: Session | None = None):
         "student_name": student_name,
         "answer": submission.answer,
         "marks": submission.marks,
+        "marks_published": bool(submission.marks_published),
+        "teacher_review_note": submission.teacher_review_note,
+        "review_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"),
         "submitted_at": submission.created_at.isoformat() if submission.created_at else None,
         "max_marks": max_marks,
         "file_id": str(file_doc["_id"]) if file_doc else None,
@@ -971,6 +991,9 @@ def build_submission_payloads(submissions: list[Submission], db: Session) -> lis
             "student_name": students.get(s.student_id),
             "answer": s.answer,
             "marks": s.marks,
+            "marks_published": bool(s.marks_published),
+            "teacher_review_note": s.teacher_review_note,
+            "review_status": "published" if s.marks_published else ("awaiting_publication" if s.marks is not None else "awaiting_grading"),
             "submitted_at": s.created_at.isoformat() if s.created_at else None,
             "max_marks": max_m,
             "file_id": str(f_doc["_id"]) if f_doc else None,
@@ -983,7 +1006,16 @@ def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
-    return build_submission_payloads(subs, db)
+    results = build_submission_payloads(subs, db)
+    for item, submission in zip(results, subs):
+        if not submission.marks_published:
+            item["marks"] = None
+            item["teacher_review_note"] = None
+            item["marks_status"] = "awaiting_publication" if submission.marks is not None else "awaiting_grading"
+        else:
+            item["marks_status"] = "published"
+            item["percentage"] = round((submission.marks / item["max_marks"]) * 100, 1) if submission.marks is not None and item.get("max_marks") else None
+    return results
 
 @app.get("/teacher/assignments/{assignment_id}/report")
 def teacher_assessment_report(
@@ -1014,6 +1046,15 @@ def teacher_assessment_report(
     )
     submissions = db.query(Submission).filter(Submission.assignment_id == assignment.id).all()
     submission_by_student = {item.student_id: item for item in submissions}
+    submission_files = {}
+    try:
+        file_docs = mongo_db.submission_files.find(
+            {"submission_id": {"$in": [item.id for item in submissions]}},
+            {"_id": 1, "submission_id": 1, "filename": 1},
+        ) if submissions else []
+        submission_files = {doc["submission_id"]: doc for doc in file_docs}
+    except Exception:
+        logger.warning("Unable to load submission file metadata for assessment report id=%s", assignment.id)
     questions = (
         db.query(AssessmentQuestion)
         .filter(AssessmentQuestion.assignment_id == assignment.id)
@@ -1035,9 +1076,111 @@ def teacher_assessment_report(
     for row in answer_rows:
         answers_by_submission.setdefault(row.submission_id, {})[row.question_id] = row
 
-    maximum = sum(question.max_marks for question in questions) if questions else None
+    maximum = sum(question.max_marks for question in questions) if questions else 100
+    from exam_evaluation import low_score_threshold
+    threshold = low_score_threshold()
     students = []
     for student_id, student_name, email in enrolled:
+        submission = submission_by_student.get(student_id)
+        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
+        question_report = []
+        for question in questions:
+            row = answer_map.get(question.id)
+            evaluation = None
+            if row and row.rubric_evaluation:
+                try:
+                    evaluation = json.loads(row.rubric_evaluation)
+                except (TypeError, ValueError):
+                    evaluation = None
+            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
+            matched = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("matched_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            missing = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("missing_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            question_report.append({
+                "question_id": question.id,
+                "question": question.question_text,
+                "reference_answer": question.reference_answer,
+                "max_marks": question.max_marks,
+                "student_answer": row.student_answer if row else None,
+                "selected_option_id": row.selected_option_id if row else None,
+                "awarded_marks": (
+                    row.teacher_override_marks if row and row.teacher_override_marks is not None
+                    else row.awarded_marks if row else None
+                ),
+                "feedback": (
+                    row.teacher_review_note if row and row.teacher_review_note
+                    else (evaluation.get("feedback") or evaluation.get("summary")) if isinstance(evaluation, dict)
+                    else None
+                ),
+                "matched_concepts": matched,
+                "missing_concepts": missing,
+                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
+                "evaluation_status": row.evaluation_status if row else None,
+            })
+        rows = list(answer_map.values())
+        suggested = sum(
+            float(row.teacher_override_marks if row.teacher_override_marks is not None else row.awarded_marks)
+            for row in rows
+        ) if rows else None
+        saved_marks = submission.marks if submission else None
+        percentage_basis = saved_marks if saved_marks is not None else suggested
+        percentage = round((percentage_basis / maximum) * 100, 1) if percentage_basis is not None and maximum > 0 else None
+        teacher_has_reviewed_all = bool(rows) and all(row.review_status in {"reviewed", "published"} for row in rows)
+        needs_review = bool(submission and (
+            any(
+                (row.review_status in {"needs_review", "evaluation_failed"} or row.evaluation_status == "evaluation_failed")
+                and row.review_status not in {"reviewed", "published"}
+                for row in rows
+            )
+            or (rows and percentage is not None and percentage < threshold and not teacher_has_reviewed_all)
+        ))
+        if not submission:
+            review_status = "not_submitted"
+        elif submission.marks_published:
+            review_status = "published"
+        elif needs_review:
+            review_status = "needs_review"
+        elif rows and all(row.review_status in {"reviewed", "published"} for row in rows):
+            review_status = "teacher_reviewed"
+        elif rows and any(row.review_status in {"ai_evaluated", "auto_finalized"} for row in rows):
+            review_status = "ai_evaluated"
+        elif saved_marks is not None:
+            review_status = "awaiting_publication"
+        else:
+            review_status = "awaiting_grading"
+        students.append({
+            "student_id": student_id,
+            "student_name": student_name,
+            "student_email": email,
+            "submission_id": submission.id if submission else None,
+            "answer": submission.answer if submission else None,
+            "file_id": str(submission_files[submission.id]["_id"]) if submission and submission.id in submission_files else None,
+            "file_name": submission_files[submission.id].get("filename", "") if submission and submission.id in submission_files else None,
+            "submission_status": "submitted" if submission else "not_submitted",
+            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
+            "grading_status": review_status,
+            "review_status": review_status,
+            "marks_status": "published" if submission and submission.marks_published else ("awaiting_publication" if saved_marks is not None else ("awaiting_grading" if submission else "not_submitted")),
+            "saved_marks": saved_marks,
+            "suggested_marks": round(suggested, 2) if suggested is not None else None,
+            "total_marks": saved_marks if submission and submission.marks_published else None,
+            "max_marks": maximum,
+            "percentage": percentage if submission and submission.marks_published else None,
+            "needs_review": needs_review,
+            "questions": question_report,
+        })
+
+    def count_status(*statuses):
+        return sum(1 for item in students if item["review_status"] in statuses)
         submission = submission_by_student.get(student_id)
         answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
         question_report = []
@@ -1103,6 +1246,13 @@ def teacher_assessment_report(
         "enrolled_students": len(enrolled),
         "submitted_students": sum(1 for item in students if item["submission_status"] == "submitted"),
         "not_submitted_students": sum(1 for item in students if item["submission_status"] == "not_submitted"),
+        "awaiting_grading": count_status("awaiting_grading"),
+        "ai_evaluated": count_status("ai_evaluated"),
+        "needs_review": count_status("needs_review"),
+        "teacher_reviewed": count_status("teacher_reviewed"),
+        "published": count_status("published"),
+        "evaluation_failures": sum(1 for item in students if any(q["evaluation_status"] == "evaluation_failed" for q in item["questions"])),
+        "low_score_threshold_percent": threshold,
         "students": students,
     }
     if response_format == "json":
@@ -1113,8 +1263,8 @@ def teacher_assessment_report(
     output = StringIO()
     writer = csv.DictWriter(output, fieldnames=[
         "assignment_id", "assignment_title", "student_id", "student_name", "student_email",
-        "submission_status", "submitted_at", "grading_status", "marks_status",
-        "total_marks", "max_marks", "percentage", "question_details",
+        "submission_status", "submitted_at", "grading_status", "review_status", "marks_status",
+        "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review", "question_details",
     ])
     writer.writeheader()
     for student in students:
@@ -1123,8 +1273,8 @@ def teacher_assessment_report(
             "assignment_title": assignment.title,
             **{key: student[key] for key in (
                 "student_id", "student_name", "student_email", "submission_status",
-                "submitted_at", "grading_status", "marks_status", "total_marks",
-                "max_marks", "percentage",
+                "submitted_at", "grading_status", "review_status", "marks_status",
+                "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review",
             )},
             "question_details": json.dumps(student["questions"], ensure_ascii=False),
         })
@@ -1151,29 +1301,67 @@ def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Sess
     return build_submission_payloads(subs, db)
 
 @app.put("/submissions/{submission_id}/marks")
-def give_marks(submission_id: int, marks: int, user=Depends(get_user), db: Session = Depends(get_db)):
+def give_marks(submission_id: int, marks: float, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
-    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id, Assignment.teacher_id == user["id"]).first()
     if not assignment:
         raise HTTPException(status_code=403, detail="You can only grade your own assessments")
-    if marks < 0:
-        raise HTTPException(status_code=400, detail="Marks cannot be negative")
-    submission.marks = marks
+    from models import StudentQuestionAnswer
+    rows = db.query(StudentQuestionAnswer).filter(StudentQuestionAnswer.submission_id == submission.id).all()
+    maximum = sum(row.max_marks for row in rows) if rows else 100
+    if marks < 0 or marks > maximum:
+        raise HTTPException(status_code=400, detail=f"Marks must be between 0 and the maximum ({maximum})")
+    submission.marks = round(float(marks), 2)
+    submission.marks_published = False
+    submission.graded_by = user["id"]
+    submission.graded_at = get_now()
     db.commit()
-    notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
-    record_audit(db, user["id"], "grading_completed", "submission", submission.id, {"assignment_id": assignment.id, "marks": marks})
-    return {"message": "Marks updated", "submission_id": submission.id, "marks": marks}
+    record_audit(db, user["id"], "grading_saved_unpublished", "submission", submission.id, {"assignment_id": assignment.id, "marks": marks, "max_marks": maximum})
+    return {"message": "Marks saved. Publish the result when review is complete.", "submission_id": submission.id, "marks": marks, "marks_published": False}
+
+@app.post("/submissions/{submission_id}/publish")
+def publish_submission(submission_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+    submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if user["role"] == "teacher" and assignment.teacher_id != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only publish results for your own assessments")
+    if submission.marks is None:
+        raise HTTPException(status_code=409, detail="Save a final mark before publishing")
+    from models import StudentQuestionAnswer
+    rows = db.query(StudentQuestionAnswer).filter(StudentQuestionAnswer.submission_id == submission.id).all()
+    if rows and any(row.review_status not in {"reviewed", "published"} for row in rows):
+        raise HTTPException(status_code=409, detail="Review every question before publishing this result")
+    if not submission.marks_published:
+        submission.marks_published = True
+        db.commit()
+        notify_users(db, [submission.student_id], "marks_published", "Marks published", f"Marks for {assignment.title} are now available.", "assignment", assignment.id)
+        record_audit(db, user["id"], "grading_published", "submission", submission.id, {"assignment_id": assignment.id, "marks": submission.marks})
+    return {"message": "Marks published", "submission_id": submission.id, "marks": submission.marks, "marks_published": True}
 
 @app.get("/my-marks")
 def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="Student access only")
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
-    return build_submission_payloads(subs, db)
+    results = build_submission_payloads(subs, db)
+    for item, submission in zip(results, subs):
+        if not submission.marks_published:
+            item["marks"] = None
+            item["marks_status"] = "awaiting_publication" if submission.marks is not None else "awaiting_grading"
+        else:
+            item["marks_status"] = "published"
+            item["percentage"] = round((submission.marks / item["max_marks"]) * 100, 1) if submission.marks is not None and item.get("max_marks") else None
+    return results
 
 @app.post("/courses/{course_id}/resources/batch")
 async def add_resources_batch(course_id: int, background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), titles: list[str] | None = Form(None), user=Depends(get_user), db: Session = Depends(get_db)):
