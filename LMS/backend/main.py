@@ -449,9 +449,18 @@ def extract_pdf_text(data: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
 
+def safe_upload_filename(filename: str | None, default: str = "submission.pdf") -> str:
+    name = os.path.basename((filename or "").replace("\\", "/")).strip()
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in "\r\n\t")
+    return name[:180] or default
+
+
 async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"", "application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="PDF uploads must use the application/pdf content type")
     data = await file.read(max_upload_bytes + 1)
     if not data:
         raise HTTPException(status_code=400, detail="Empty PDF file")
@@ -734,18 +743,57 @@ async def submit_assignment(
         db.refresh(submission)
 
     if file_data:
-        await asyncio.to_thread(
-            mongo_db.submission_files.insert_one,
-            {
-                "submission_id": submission.id,
-                "assignment_id": assignment.id,
-                "student_id": user["id"],
-                "filename": file.filename or "submission.pdf",
-                "content_type": "application/pdf",
-                "file": file_data,
-                "created_at": datetime.utcnow()
-            }
-        )
+        try:
+            await asyncio.to_thread(
+                mongo_db.submission_files.insert_one,
+                {
+                    "submission_id": submission.id,
+                    "assignment_id": assignment.id,
+                    "student_id": user["id"],
+                    "filename": safe_upload_filename(file.filename),
+                    "content_type": "application/pdf",
+                    "file": file_data,
+                    "created_at": datetime.utcnow()
+                }
+            )
+        except Exception:
+            logger.exception("Submission PDF storage failed submission_id=%s", submission.id)
+            mongo_cleanup_ok = True
+            try:
+                await asyncio.to_thread(
+                    mongo_db.submission_files.delete_many,
+                    {"submission_id": submission.id}
+                )
+            except Exception:
+                mongo_cleanup_ok = False
+                logger.exception("Submission PDF compensation failed submission_id=%s", submission.id)
+            db_cleanup_ok = True
+            try:
+                from models import StudentQuestionAnswer
+                db.query(StudentQuestionAnswer).filter(
+                    StudentQuestionAnswer.submission_id == submission.id
+                ).delete(synchronize_session=False)
+                db.query(Submission).filter(Submission.id == submission.id).delete(synchronize_session=False)
+                db.commit()
+            except Exception:
+                db.rollback()
+                db_cleanup_ok = False
+                logger.exception("Submission database compensation failed submission_id=%s", submission.id)
+            if mongo_cleanup_ok and db_cleanup_ok:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "SUBMISSION_STORAGE_FAILED",
+                        "message": "PDF storage failed and the submission was rolled back. Please retry."
+                    },
+                )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "SUBMISSION_RECONCILIATION_REQUIRED",
+                    "message": "PDF storage failed and automatic cleanup could not be confirmed. Contact the course teacher before retrying."
+                },
+            )
 
     notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
     return {"message": "Submission successful", "id": submission.id, "marks": submission.marks, "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
@@ -854,6 +902,157 @@ def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Student access only")
     subs = db.query(Submission).filter(Submission.student_id == user["id"]).order_by(Submission.id.desc()).all()
     return build_submission_payloads(subs, db)
+
+@app.get("/teacher/assignments/{assignment_id}/report")
+def teacher_assessment_report(
+    assignment_id: int,
+    response_format: str = "json",
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+):
+    if user["role"] not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+    if response_format not in {"json", "csv"}:
+        raise HTTPException(status_code=400, detail="response_format must be json or csv")
+
+    from models import AssessmentQuestion, StudentQuestionAnswer
+
+    assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if user["role"] == "teacher" and assignment.teacher_id != user["id"]:
+        raise HTTPException(status_code=403, detail="You can only view reports for your own assessments")
+
+    enrolled = (
+        db.query(User.id, User.name, User.email)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .filter(Enrollment.course_id == assignment.course_id)
+        .order_by(User.id)
+        .all()
+    )
+    submissions = db.query(Submission).filter(Submission.assignment_id == assignment.id).all()
+    submission_by_student = {item.student_id: item for item in submissions}
+    questions = (
+        db.query(AssessmentQuestion)
+        .filter(AssessmentQuestion.assignment_id == assignment.id)
+        .order_by(AssessmentQuestion.order_index, AssessmentQuestion.id)
+        .all()
+    )
+    question_ids = [question.id for question in questions]
+    submission_ids = [item.id for item in submissions]
+    answer_rows = (
+        db.query(StudentQuestionAnswer)
+        .filter(
+            StudentQuestionAnswer.submission_id.in_(submission_ids),
+            StudentQuestionAnswer.question_id.in_(question_ids),
+        )
+        .all()
+        if submission_ids and question_ids else []
+    )
+    answers_by_submission = {}
+    for row in answer_rows:
+        answers_by_submission.setdefault(row.submission_id, {})[row.question_id] = row
+
+    maximum = sum(question.max_marks for question in questions) if questions else None
+    students = []
+    for student_id, student_name, email in enrolled:
+        submission = submission_by_student.get(student_id)
+        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
+        question_report = []
+        for question in questions:
+            row = answer_map.get(question.id)
+            evaluation = None
+            if row and row.rubric_evaluation:
+                try:
+                    evaluation = json.loads(row.rubric_evaluation)
+                except (TypeError, ValueError):
+                    evaluation = None
+            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
+            matched = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("matched_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            missing = sorted({
+                str(term)
+                for criterion in criteria if isinstance(criterion, dict)
+                for term in (criterion.get("missing_concepts") or [])
+                if isinstance(term, (str, int, float))
+            })
+            question_report.append({
+                "question_id": question.id,
+                "question": question.question_text,
+                "reference_answer": question.reference_answer,
+                "max_marks": question.max_marks,
+                "student_answer": row.student_answer if row else None,
+                "selected_option_id": row.selected_option_id if row else None,
+                "awarded_marks": (
+                    row.teacher_override_marks if row and row.teacher_override_marks is not None
+                    else row.awarded_marks if row else None
+                ),
+                "feedback": (
+                    row.teacher_review_note if row and row.teacher_review_note
+                    else evaluation.get("feedback") or evaluation.get("summary") if isinstance(evaluation, dict)
+                    else None
+                ),
+                "matched_concepts": matched,
+                "missing_concepts": missing,
+                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
+                "evaluation_status": row.evaluation_status if row else None,
+            })
+        marks = submission.marks if submission else None
+        students.append({
+            "student_id": student_id,
+            "student_name": student_name,
+            "student_email": email,
+            "submission_status": "submitted" if submission else "not_submitted",
+            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
+            "grading_status": "not_submitted" if not submission else ("graded" if marks is not None else "awaiting_grading"),
+            "marks_status": "available" if marks is not None else "not_available",
+            "total_marks": marks,
+            "max_marks": maximum,
+            "percentage": round((marks / maximum) * 100, 1) if marks is not None and maximum else None,
+            "questions": question_report,
+        })
+
+    report = {
+        "assignment": {"id": assignment.id, "title": assignment.title, "course_id": assignment.course_id},
+        "enrolled_students": len(enrolled),
+        "submitted_students": sum(1 for item in students if item["submission_status"] == "submitted"),
+        "not_submitted_students": sum(1 for item in students if item["submission_status"] == "not_submitted"),
+        "students": students,
+    }
+    if response_format == "json":
+        return report
+
+    import csv
+    from io import StringIO
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=[
+        "assignment_id", "assignment_title", "student_id", "student_name", "student_email",
+        "submission_status", "submitted_at", "grading_status", "marks_status",
+        "total_marks", "max_marks", "percentage", "question_details",
+    ])
+    writer.writeheader()
+    for student in students:
+        writer.writerow({
+            "assignment_id": assignment.id,
+            "assignment_title": assignment.title,
+            **{key: student[key] for key in (
+                "student_id", "student_name", "student_email", "submission_status",
+                "submitted_at", "grading_status", "marks_status", "total_marks",
+                "max_marks", "percentage",
+            )},
+            "question_details": json.dumps(student["questions"], ensure_ascii=False),
+        })
+    filename = f"assessment-{assignment.id}-report.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @app.get("/teacher/submissions")
 def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Session = Depends(get_db)):

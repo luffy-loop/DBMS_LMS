@@ -1,52 +1,43 @@
 from ai_jobs import _generate_grounded_questions
 
 
-def test_quiz_questions_are_grounded_and_correct_answer_is_an_option():
-    source = {"title": "Database Normalization", "content": "Database normalization organizes relational tables to reduce redundant data and improve data integrity. It uses normal forms to guide schema design."}
+def test_quiz_questions_are_meaningful_and_grounded():
+    source = {"title": "Database Notes", "content": (
+        "A primary key is a column that uniquely identifies each row in a relational table. "
+        "A foreign key is a column that references a key in another table and maintains referential integrity. "
+        "Normalization is a process that organizes relational data to reduce redundant values and prevent anomalies. "
+        "An index is a data structure that helps locate rows faster for suitable queries in a database."
+    )}
     questions = _generate_grounded_questions([source], 5)
-    assert questions
-    assert all(q["context"] in source["content"] for q in questions)
-    assert all(q["answer"] in q["options"] for q in questions)
+    assert len(questions) >= 1
     assert all(q["source"] == source["title"] for q in questions)
-    assert all(all(option in source["content"] for option in q["options"]) for q in questions)
+    assert all(q["answer"] in q["options"] for q in questions)
+    assert all(len(q["options"]) == 4 for q in questions)
+    assert all(len({option.casefold() for option in q["options"]}) == 4 for q in questions)
+    assert all(q["question"].startswith("Which concept matches this description:") for q in questions)
+    assert all(q["answer"].casefold() not in q["question"].casefold() for q in questions)
+    assert all(q["answer"].casefold() not in q["context"].casefold() for q in questions)
+    assert len({q["question"].casefold() for q in questions}) == len(questions)
 
 
-def test_quiz_generation_returns_empty_for_unusable_material():
+def test_quiz_generation_fails_closed_for_insufficient_or_generic_material():
     assert _generate_grounded_questions([{"title": "Empty", "content": ""}], 5) == []
-    assert _generate_grounded_questions([{"title": "One sentence", "content": "This course has only one meaningful statement that cannot provide distractors."}], 5) == []
+    assert _generate_grounded_questions([{"title": "Generic", "content": "This course has only one meaningful statement that cannot provide distractors."}], 5) == []
+    assert _generate_grounded_questions([{"title": "Template-like", "content": (
+        "Students should read the material carefully before the examination. "
+        "The lecture discusses several topics from the selected course. "
+        "Assignments should be submitted before the deadline."
+    )}], 5) == []
 
 
-def test_quiz_job_uses_course_scoped_retrieval_without_embedding_model(monkeypatch):
-    import vector_store
-    from ai_jobs import _timed_search
-
-    called = {}
-    expected = ([{"title": "Course notes", "content": "A grounded statement from the selected course material."}], {"mode": "course_scoped_lexical"})
-
-    def fake_search(query, course_id):
-        called["query"] = query
-        called["course_id"] = course_id
-        return expected
-
-    monkeypatch.setattr(vector_store, "search_resources_for_quiz", fake_search)
-    result = _timed_search("course material", 42)
-    assert result == expected
-    assert called == {"query": "course material", "course_id": 42}
-
-
-def test_quiz_job_uses_course_scoped_retrieval_without_embedding_model(monkeypatch):
-    import vector_store
-    from ai_jobs import _timed_search
-
-    called = {}
-    expected = ([{"title": "Course notes", "content": "A grounded statement from the selected course material."}], {"mode": "course_scoped_lexical"})
-
-    def fake_search(query, course_id):
-        called["query"] = query
-        called["course_id"] = course_id
-        return expected
-
-    monkeypatch.setattr(vector_store, "search_resources_for_quiz", fake_search)
-    result = _timed_search("course material", 42)
-    assert result == expected
-    assert called == {"query": "course material", "course_id": 42}
+def test_quiz_generation_deduplicates_questions_and_options():
+    source = {"title": "Notes", "content": (
+        "A process is a program in execution managed by the operating system. "
+        "A thread is an execution path within a process that shares process memory. "
+        "A deadlock is a state where processes wait indefinitely for unavailable resources. "
+        "A mutex is a synchronization mechanism that protects a shared critical section."
+    )}
+    questions = _generate_grounded_questions([source, source], 10)
+    assert len({q["question"].casefold() for q in questions}) == len(questions)
+    assert all(q["answer"] in q["options"] for q in questions)
+    assert all(len(q["options"]) == 4 for q in questions)

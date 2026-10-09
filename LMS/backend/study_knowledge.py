@@ -11,6 +11,8 @@ KNOWLEDGE = [
     {"topic":"Precision and Recall","aliases":["precision","recall","precision recall"],"answer":"Precision measures how many predicted positives are actually positive, while recall measures how many actual positives the model successfully finds.","bullets":["Precision focuses on correctness among predicted positives","Recall focuses on coverage of actual positives","Both are useful when accuracy alone is insufficient"],"terms":["true positive","false positive","false negative"],"tip":"Precision asks 'of what I predicted positive, how many were right?'; recall asks 'of all real positives, how many did I find?'."},
     {"topic":"Process","aliases":["process","operating system process"],"answer":"A process is a program in execution together with its current execution state and resources managed by the operating system.","bullets":["Has its own execution state","Uses operating-system-managed resources","A process can contain one or more threads"],"terms":["program","execution state","resources"],"tip":"Program is passive code; process is that program while it is executing."},
     {"topic":"Deadlock","aliases":["deadlock","dead lock"],"answer":"A deadlock is a state in which processes are permanently waiting for resources or events that cannot be obtained because of the circular dependency among them.","bullets":["Processes remain blocked","A circular wait can be involved","Operating systems use prevention, avoidance or detection strategies"],"terms":["circular wait","resource","blocked"],"tip":"Deadlock is about processes waiting indefinitely for each other or for unavailable resources."},
+    {"topic":"Mutex Lock","aliases":["mutex lock","mutex locks","mutex","mutual exclusion lock"],"answer":"A mutex lock is a synchronization mechanism that allows only one thread or process at a time to enter a protected critical section. A thread acquires the lock before accessing shared data and releases it when finished, allowing another waiting thread to proceed. This mutual-exclusion property prevents concurrent access from causing race conditions. For example, two threads updating the same bank balance should acquire the same mutex before reading and writing the balance, then release it afterward.","bullets":["Acquire the lock before entering the critical section","Release the lock after the protected operation","Only one thread can hold a mutex at a time","Use the same lock to protect shared state from race conditions"],"terms":["critical section","shared resource","mutual exclusion","race condition"],"tip":"Lock, access shared data, then unlock. Every path through the critical section must release the lock."},
+    {"topic":"Semaphore","aliases":["semaphore","semaphores","semaphore synchronization"],"answer":"A semaphore is a synchronization primitive that maintains a counter used to coordinate access to shared resources or signal between threads and processes. A wait (P) operation decrements the counter and may block when the resource is unavailable; a signal (V) operation increments it and can wake a waiting task. A binary semaphore is commonly used for one-at-a-time coordination, while a counting semaphore can represent several available resource units. Unlike a mutex, a semaphore is not necessarily owned by the task that signals it.","bullets":["wait/P acquires a permit and may block","signal/V releases a permit and may wake a waiter","Binary semaphores coordinate one permit; counting semaphores represent multiple permits","Semaphores can coordinate tasks without mutex-style ownership"],"terms":["wait","signal","binary semaphore","counting semaphore"],"tip":"Remember: wait consumes a permit; signal returns a permit or signals availability."},
     {"topic":"TCP","aliases":["tcp","transmission control protocol"],"answer":"TCP is a connection-oriented transport-layer protocol that provides reliable, ordered delivery of a byte stream.","bullets":["Connection-oriented","Reliable and ordered delivery","Uses acknowledgements and retransmission mechanisms"],"terms":["transport layer","reliable delivery","connection-oriented"],"tip":"TCP emphasizes reliable ordered delivery; UDP emphasizes a simpler connectionless service."},
     {"topic":"UDP","aliases":["udp","user datagram protocol"],"answer":"UDP is a connectionless transport-layer protocol that sends datagrams without TCP-style guarantees of reliable ordered delivery.","bullets":["Connectionless","Low protocol overhead","Does not provide TCP-style reliable ordered delivery"],"terms":["datagram","transport layer","connectionless"],"tip":"Use the TCP-versus-UDP distinction to remember reliability versus lower overhead."},
     {"topic":"Embeddings","aliases":["embedding","embeddings","vector embedding"],"answer":"An embedding is a numerical vector representation of data such as text, designed so that useful semantic relationships can be compared mathematically.","bullets":["Represents content as numbers","Can capture semantic similarity","Often used for semantic search and retrieval"],"terms":["vector","semantic similarity","retrieval"],"tip":"In semantic search, text is converted into vectors and similar meanings can be compared."},
@@ -30,8 +32,32 @@ KNOWLEDGE = [
 ]
 
 def find_knowledge(text):
-    q = (text or "").lower().strip()
+    import re
+
+    q = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+    if not q:
+        return None
+    tokens = set(q.split())
+    academic_cues = {
+        "explain", "define", "definition", "describe", "difference", "compare",
+        "example", "examples", "concept", "algorithm", "programming", "program",
+        "code", "database", "sql", "python", "java", "operating", "system",
+        "computer", "network", "math", "mathematics", "physics", "chemistry",
+        "biology", "machine", "learning", "exam", "study", "question", "what",
+        "why", "how", "meaning", "means", "use", "uses", "work", "works",
+    }
+    candidates = []
     for item in KNOWLEDGE:
-        if any(alias in q for alias in item["aliases"]):
-            return item
-    return None
+        for alias in item["aliases"]:
+            normalized = re.sub(r"[^a-z0-9]+", " ", alias.lower()).strip()
+            if normalized and re.search(
+                r"(?<![a-z0-9])" + re.escape(normalized) + r"(?![a-z0-9])", q
+            ):
+                candidates.append((len(normalized.split()), len(normalized), item))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
+    best = candidates[0][2]
+    if not any(len(alias.split()) > 1 for alias in best["aliases"]) and not (tokens & academic_cues):
+        return None
+    return best

@@ -69,6 +69,18 @@ def _retrieval_answer(question, results):
     return answer[:5000], useful
 
 
+def _looks_academic_question(question):
+    text = (question or "").lower()
+    cues = (
+        "explain", "define", "definition", "algorithm", "programming", "code",
+        "database", "sql", "python", "java", "operating system", "computer",
+        "network", "mathematics", "math", "physics", "chemistry", "biology",
+        "machine learning", "study", "concept", "formula", "equation",
+        "difference between",
+    )
+    return any(cue in text for cue in cues)
+
+
 def build_answer(question, results):
     knowledge = find_knowledge(question)
     if knowledge:
@@ -79,8 +91,15 @@ def build_answer(question, results):
             "sources": [{"title": knowledge["topic"], "type": "general study knowledge", "course_id": 0, "distance": 0}] + [{"title": r["title"], "type": r["type"], "course_id": r["course_id"], "distance": r["distance"]} for r in results[:3]],
         }
     if not results:
+        if not _looks_academic_question(question):
+            return {
+                "answer": "This does not appear to be an academic study question supported by the configured knowledge topics. Ask about a course concept or provide relevant course material.",
+                "confidence": "low",
+                "mode": "unsupported query",
+                "sources": [],
+            }
         return {
-            "answer": "I can help with general academic questions, explanations, examples and step-by-step problem solving. This deployment does not have a general-purpose model provider configured for unknown topics yet. Try rephrasing the question or use a supported study topic.",
+            "answer": "This deployment does not have a general-purpose model provider configured for this topic, and no matching course material was found. Try a supported study topic or provide relevant course material.",
             "confidence": "low",
             "mode": "general study assistant",
             "sources": [],
