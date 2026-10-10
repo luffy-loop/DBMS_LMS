@@ -799,9 +799,8 @@ def evaluate_hybrid_descriptive(
             evaluator_confidence = 0.68
 
     evaluator_confidence = max(0.0, min(1.0, float(evaluator_confidence)))
+    # Model confidence is not teacher approval and must never finalize a grade.
     if evaluator_confidence >= 0.75:
-        review_status = "auto_finalized"
-    elif evaluator_confidence >= 0.50:
         review_status = "review_recommended"
     else:
         review_status = "review_required"
