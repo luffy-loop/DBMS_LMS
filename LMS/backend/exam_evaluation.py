@@ -902,6 +902,61 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             failures.append("A reference answer is missing for at least one descriptive question.")
             continue
 
+        # Fast path for concise answers with strong lexical/concept overlap. This avoids
+        # blocking on large embedding/NLI model downloads for simple answers while
+        # keeping these model-light suggestions explicitly subject to teacher review.
+        criteria_rows = rubrics_by_qid.get(question.id, [])
+        if len(student_answer.split()) <= 20 and len(reference_answer.split()) <= 16:
+            lexical_reference = es.calculate_lexical_answer_score(student_answer, reference_answer)
+            contradiction, contradiction_details, _ = es.detect_contradictions_and_correctness(
+                student_answer, reference_answer,
+                [str(getattr(item, "criterion_text", "")) for item in criteria_rows]
+            )
+            if lexical_reference >= 0.50 and not contradiction:
+                if criteria_rows:
+                    criteria_results = []
+                    awarded_total = 0.0
+                    for criterion in criteria_rows:
+                        criterion_text = str(getattr(criterion, "criterion_text", "") or "")
+                        criterion_max = float(getattr(criterion, "max_marks", 1.0) or 1.0)
+                        ratio = es.calculate_lexical_answer_score(student_answer, criterion_text)
+                        awarded_criterion = round(max(0.0, min(criterion_max, ratio * criterion_max)), 2)
+                        awarded_total += awarded_criterion
+                        criteria_results.append({
+                            "criterion_text": criterion_text,
+                            "max_marks": criterion_max,
+                            "awarded_marks": awarded_criterion,
+                            "score_ratio": ratio,
+                            "covered": ratio >= 0.50,
+                            "method": "lexical_concept_overlap",
+                        })
+                    row.awarded_marks = max(0.0, min(float(question.max_marks), round(awarded_total, 1)))
+                else:
+                    criteria_results = []
+                    row.awarded_marks = max(0.0, min(float(question.max_marks), round(lexical_reference * float(question.max_marks), 1)))
+                reference_terms = list(dict.fromkeys(
+                    re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", reference_answer.lower())
+                ))
+                matched_terms = [term for term in reference_terms if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", student_answer.lower())]
+                missing_terms = [term for term in reference_terms if term not in matched_terms and term not in {"is", "a", "an", "the", "of", "and", "to", "for"}]
+                row.similarity_score = None
+                row.student_embedding = None
+                row.evaluation_status = "evaluated"
+                row.evaluator_version = "lexical-short-answer-v1"
+                row.evaluator_confidence = min(0.74, max(0.55, lexical_reference))
+                row.evaluated_at = get_now()
+                row.review_status = "needs_review"
+                row.rubric_evaluation = json.dumps({
+                    "summary": "A concise answer matched key concepts without a detected contradiction.",
+                    "feedback": "Suggested partial/full credit is based on lexical concept overlap (" + str(round(lexical_reference * 100)) + "%). This fast path avoids waiting for semantic model startup; teacher review is required.",
+                    "matched_concepts": matched_terms,
+                    "missing_concepts": missing_terms,
+                    "criteria": criteria_results,
+                    "scoring_method": "lexical-short-answer-v1",
+                    "review_reason": "Concise-answer fast path; teacher confirmation required.",
+                })
+                continue
+
         try:
             student_vector = es.generate_embedding(student_answer)
             if not question.reference_embedding:
@@ -911,7 +966,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             awarded, similarity, evaluation = es.evaluate_hybrid_descriptive(
                 db, student_answer, question.max_marks, reference_answer,
                 list(question.reference_embedding) if question.reference_embedding else None,
-                rubrics_by_qid.get(question.id, [])
+                criteria_rows
             )
             if not isinstance(evaluation, dict) or evaluation.get("fallback_error"):
                 raise RuntimeError("evaluation_unavailable")
