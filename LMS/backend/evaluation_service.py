@@ -542,8 +542,23 @@ def evaluate_hybrid_descriptive(
             "criteria": []
         }
 
+    # Embedding models are optional at grading time: a model download/cache failure
+    # must not turn a valid submission into an HTTP 500 or an unreviewed grade.
+    embedding_fallback_used = False
+
+    def safe_generate_embedding(text_content: str) -> list[float]:
+        nonlocal embedding_fallback_used
+        try:
+            vector = generate_embedding(text_content)
+            if len(vector) != VECTOR_DIMENSION:
+                raise ValueError("Unexpected embedding dimension")
+            return vector
+        except Exception:
+            embedding_fallback_used = True
+            return [0.0] * VECTOR_DIMENSION
+
     # Generate 384-dimensional vector embedding for student answer
-    stu_vec = generate_embedding(clean_ans)
+    stu_vec = safe_generate_embedding(clean_ans)
 
     # Compute overall pgvector similarity against reference answer
     if reference_embedding:
@@ -556,7 +571,7 @@ def evaluate_hybrid_descriptive(
 
     # Sentence-level breakdown for granular criterion matching
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_ans) if len(s.strip().split()) >= 2]
-    sentence_vecs = [generate_embedding(s) for s in sentences] if sentences else []
+    sentence_vecs = [safe_generate_embedding(s) for s in sentences] if sentences else []
 
     criteria_texts = [_item_value(c, "criterion_text", "") for c in rubric_criteria]
 
@@ -576,7 +591,7 @@ def evaluate_hybrid_descriptive(
             crit_emb = _item_value(c, "criterion_embedding")
 
             if not crit_emb:
-                crit_emb = generate_embedding(crit_text)
+                crit_emb = safe_generate_embedding(crit_text)
             else:
                 crit_emb = list(crit_emb)
 
@@ -596,7 +611,7 @@ def evaluate_hybrid_descriptive(
             matches = get_crit_matches(pred_words, clean_ans)
             match_ratio = len(matches) / len(pred_words) if pred_words else 0.0
 
-            pred_emb = generate_embedding(pred_text) if pred_text != crit_text else crit_emb
+            pred_emb = safe_generate_embedding(pred_text) if pred_text != crit_text else crit_emb
             sim_pred_sents = max([compute_pgvector_similarity(db, sv, pred_emb) for sv in sentence_vecs]) if sentence_vecs else 0.0
             sim_pred_full = compute_pgvector_similarity(db, stu_vec, pred_emb)
             pred_sim = max(sim_pred_full, sim_pred_sents)
@@ -618,7 +633,7 @@ def evaluate_hybrid_descriptive(
 
             # 4. NLI Inference on shortlisted candidate (only when candidate has relevance to avoid false contradiction on omitted concepts)
             is_relevant_candidate = (effective_sim >= 0.20 or match_ratio > 0 or candidate_sim >= 0.20)
-            if is_relevant_candidate:
+            if is_relevant_candidate and not embedding_fallback_used:
                 try:
                     nli_result = classify_nli(premise=crit_text, hypothesis=best_candidate_sentence)
                     nli_contra = nli_result.get("contradiction", 0.0)
@@ -773,7 +788,7 @@ def evaluate_hybrid_descriptive(
         evidence_score = max(float(lexical_score), float(semantic_score))
         base_marks = round(evidence_score * float(question_max_marks), 1)
 
-        nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
+        nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer and not embedding_fallback_used else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
         legacy_contra = nli_res.get("contradiction", 0.0)
         legacy_entail = nli_res.get("entailment", 0.0)
 
@@ -799,8 +814,12 @@ def evaluate_hybrid_descriptive(
             evaluator_confidence = 0.68
 
     evaluator_confidence = max(0.0, min(1.0, float(evaluator_confidence)))
+    if embedding_fallback_used:
+        # Lexical evidence can still provide a provisional score, but it must be
+        # explicitly reviewed because semantic/NLI signals were unavailable.
+        evaluator_confidence = min(evaluator_confidence, 0.49)
     # Model confidence is not teacher approval and must never finalize a grade.
-    if evaluator_confidence >= 0.75:
+    if evaluator_confidence >= 0.75 and not embedding_fallback_used:
         review_status = "review_recommended"
     else:
         review_status = "review_required"
@@ -815,6 +834,8 @@ def evaluate_hybrid_descriptive(
         "contradiction_details": contradiction_details,
         "evaluator_confidence": round(evaluator_confidence, 2),
         "review_status": review_status,
+        "embedding_fallback_used": embedding_fallback_used,
+        "scoring_fallback": "lexical_review_required" if embedding_fallback_used else None,
         "criteria": criteria_eval_list
     }
 

@@ -83,3 +83,20 @@ def test_concise_correct_answer_matches_sentence_in_detailed_reference():
         for candidate in [reference, *reference_parts]
     )
     assert score >= 0.35
+
+def test_embedding_failure_uses_lexical_fallback_and_requires_review(monkeypatch):
+    reference = "A primary key uniquely identifies each row in a database table"
+    answer = "A unique key identifies each row in the table"
+    monkeypatch.setattr(es, "generate_embedding", lambda text: (_ for _ in ()).throw(RuntimeError("model unavailable")))
+    monkeypatch.setattr(es, "classify_nli", lambda **kwargs: (_ for _ in ()).throw(AssertionError("NLI should not load after embedding failure")))
+
+    marks, similarity, result = es.evaluate_hybrid_descriptive(
+        None, answer, 10, reference, None, []
+    )
+
+    assert 0 < marks <= 10
+    assert similarity == 0.0
+    assert result["embedding_fallback_used"] is True
+    assert result["scoring_fallback"] == "lexical_review_required"
+    assert result["review_status"] == "review_required"
+    assert result["evaluator_confidence"] <= 0.49
