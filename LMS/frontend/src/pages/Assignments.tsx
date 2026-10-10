@@ -47,7 +47,7 @@ function DateTimeField({label,value,onChange}:{label:string;value:string;onChang
   <div className="lms-datetime-card min-w-0 rounded-2xl border border-white/10 bg-white/[0.035] p-3 sm:p-4">
    <div className="lms-date-native-row">
     <CalendarDays size={18} aria-hidden="true" className="shrink-0 text-violet-300"/>
-    <input aria-label={label+" date"} type="date" value={date} onChange={e=>updateDate(e.target.value)} className="lms-input lms-native-date"/>
+    <input aria-label={label+" date"} type="date" value={date} onClick={e=>{if(typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker()}} onChange={e=>updateDate(e.target.value)} className="lms-input lms-native-date"/>
    </div>
    <div className="lms-time-native-row mt-3">
     <Clock size={18} aria-hidden="true" className="shrink-0 text-violet-300"/>
