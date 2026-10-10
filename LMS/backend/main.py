@@ -562,9 +562,21 @@ async def create_assignment(
             }
         )
 
-    student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
-    notify_users(db, student_ids, "assignment_created", f"New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
-    record_audit(db, user["id"], "assignment_created", "assignment", assignment.id, {"course_id": course.id, "type": type})
+    # The assessment is already committed. Notification or audit failures must not
+    # turn a successful create into a failed response that encourages duplicate retries.
+    try:
+        student_ids = [row[0] for row in db.query(Enrollment.student_id).filter(Enrollment.course_id == course.id).all()]
+        notify_users(db, student_ids, "assignment_created", "New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
+    except Exception:
+        logger.exception("Assessment created but student notification lookup failed; assignment_id=%s", assignment.id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    try:
+        record_audit(db, user["id"], "assignment_created", "assignment", assignment.id, {"course_id": course.id, "type": type})
+    except Exception:
+        logger.exception("Assessment created but audit recording failed; assignment_id=%s", assignment.id)
 
     return {"message": "Assessment created", "id": assignment.id, "title": assignment.title, "ai_grading_enabled": bool(ai_question_id), "ai_question_id": ai_question_id}
 
