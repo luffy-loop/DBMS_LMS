@@ -47,7 +47,7 @@ export default function Marks(){
    if(role==="teacher"){
     const data=await apiJson<Assignment[]>("/my-assignments")
     setAssignments(data)
-    setAssignmentId(current=>current||String(data[0]?.id||""))
+    const requested=new URLSearchParams(window.location.search).get("assignment_id");setAssignmentId(current=>current||(requested&&data.some(item=>String(item.id)===requested)?requested:String(data[0]?.id||"")))
    }else if(role==="admin"){
     return
    }else{
