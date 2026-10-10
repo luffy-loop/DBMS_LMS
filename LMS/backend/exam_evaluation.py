@@ -44,10 +44,16 @@ def low_score_threshold() -> float:
 
 
 def is_low_score(awarded: float, maximum: float, threshold: float | None = None) -> bool:
-    if maximum <= 0:
+    from decimal import Decimal, InvalidOperation
+    try:
+        awarded_value = Decimal(str(awarded))
+        maximum_value = Decimal(str(maximum))
+        limit = Decimal(str(low_score_threshold() if threshold is None else min(100.0, max(0.0, float(threshold)))))
+    except (InvalidOperation, TypeError, ValueError):
+        return True
+    if not awarded_value.is_finite() or not maximum_value.is_finite() or maximum_value <= 0:
         return False
-    limit = low_score_threshold() if threshold is None else min(100.0, max(0.0, float(threshold)))
-    return (float(awarded) / float(maximum)) * 100 < limit
+    return awarded_value < maximum_value * limit / Decimal("100")
 
 
 get_utc_now = get_now
@@ -439,7 +445,7 @@ def evaluate_and_record_exam(
     - Evaluates all Descriptive questions via pgvector cosine similarity in PostgreSQL.
     - Persists individual student_question_answers and overall submission.
     """
-    now = datetime.now()
+    now = get_now()
     questions = db.query(AssessmentQuestion).filter(
         AssessmentQuestion.assignment_id == assignment.id
     ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
@@ -518,7 +524,7 @@ def evaluate_and_record_exam(
                 rubrics = rubrics_by_qid.get(q.id, [])
 
                 if not clean_ans or len(clean_ans.split()) < 2:
-                    # Unanswered or empty descriptive response -> 0 marks
+                    manual_review_required = bool(ans_data.get("manual_review_required"))
                     empty_eval = {
                         "evaluator_version": "hybrid-v2-nli",
                         "embedding_model": "all-MiniLM-L6-v2",
@@ -527,8 +533,9 @@ def evaluate_and_record_exam(
                         "overall_correctness": 0.0,
                         "contradiction_detected": False,
                         "contradiction_details": [],
-                        "evaluator_confidence": 0.99,
-                        "review_status": "auto_finalized",
+                        "evaluator_confidence": 0.0 if manual_review_required else 0.99,
+                        "review_status": "needs_review" if manual_review_required else "auto_finalized",
+                        "feedback": "PDF text could not be extracted reliably. Please review the uploaded file manually." if manual_review_required else "No substantive answer was provided.",
                         "criteria": []
                     }
                     sqa = StudentQuestionAnswer(
@@ -542,11 +549,11 @@ def evaluate_and_record_exam(
                         similarity_score=0.0,
                         awarded_marks=0.0,
                         max_marks=q.max_marks,
-                        evaluation_status="unanswered" if not clean_ans else "evaluated",
+                        evaluation_status="evaluation_failed" if manual_review_required else ("unanswered" if not clean_ans else "evaluated"),
                         evaluated_at=now,
                         evaluator_version="hybrid-v2-nli",
-                        evaluator_confidence=0.99,
-                        review_status="auto_finalized",
+                        evaluator_confidence=0.0 if manual_review_required else 0.99,
+                        review_status="needs_review" if manual_review_required else "auto_finalized",
                         rubric_evaluation=json.dumps(empty_eval)
                     )
                     db.add(sqa)
@@ -633,11 +640,12 @@ def evaluate_and_record_exam(
         total_max = sum(q.max_marks for q in questions)
         rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2)
         failed_evaluation = any(row.evaluation_status == "evaluation_failed" for row in recorded_answers)
-        if total_max > 0 and is_low_score(rounded_marks, total_max):
+        if total_max > 0 and is_low_score(total_awarded, total_max):
             for row in recorded_answers:
                 if row.review_status != "evaluation_failed":
                     row.review_status = "needs_review"
-        submission.marks = None if failed_evaluation else rounded_marks
+        # Aggregate AI marks remain suggestions on question rows until a teacher reviews.
+        submission.marks = None
         submission.marks_published = False
         submission.graded_by = None
         submission.graded_at = None
@@ -713,7 +721,15 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
         for ans in data.answers
     }
 
-    submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+    try:
+        submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
+    except HTTPException as exc:
+        if exc.status_code == 500 and db.query(Submission.id).filter(
+            Submission.assignment_id == assignment.id,
+            Submission.student_id == user["id"],
+        ).first():
+            raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+        raise
 
     total_max = sum(q.max_marks for q in questions)
 
@@ -747,6 +763,205 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
 # =========================================================================
 # 7. SUBMISSION EVALUATION DETAILS (Strict Role Separation)
 # =========================================================================
+@router.post("/submissions/{submission_id}/correct-with-ai")
+def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Teacher or admin access only")
+
+    submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    if user["role"] == "teacher":
+        assignment, _ = _check_teacher_owns_assignment(submission.assignment_id, user["id"], db)
+    else:
+        assignment = db.query(Assignment).filter(Assignment.id == submission.assignment_id).first()
+        if not assignment:
+            raise HTTPException(status_code=404, detail="Assessment not found")
+
+    records = db.query(StudentQuestionAnswer).filter(
+        StudentQuestionAnswer.submission_id == submission.id
+    ).all()
+    if not records:
+        raise HTTPException(
+            status_code=422,
+            detail="AI correction requires saved question-level answers. Add assessment questions and a reference answer or rubric, then ask the student to submit again. Manual grading remains available."
+        )
+
+    question_ids = [row.question_id for row in records]
+    questions = {
+        q.id: q for q in db.query(AssessmentQuestion)
+        .filter(AssessmentQuestion.id.in_(question_ids), AssessmentQuestion.assignment_id == assignment.id)
+        .all()
+    }
+    rubric_rows = db.query(AssessmentQuestionRubric).filter(
+        AssessmentQuestionRubric.question_id.in_(question_ids)
+    ).order_by(AssessmentQuestionRubric.order_index, AssessmentQuestionRubric.id).all()
+    rubrics_by_qid = {}
+    for rubric in rubric_rows:
+        rubrics_by_qid.setdefault(rubric.question_id, []).append(rubric)
+
+    # Reuse the persisted result on repeated successful requests. Failed rows remain retryable.
+    if all(row.evaluation_status not in {"evaluation_failed", "pending"} for row in records) and any(
+        row.evaluator_version and row.review_status in {"ai_evaluated", "needs_review"} for row in records
+    ):
+        total_max = sum(float(row.max_marks) for row in records)
+        suggested = sum(float(row.awarded_marks) for row in records)
+        return {
+            "submission_id": submission.id,
+            "suggested_marks": round(suggested, 2),
+            "max_marks": total_max,
+            "review_required": any(row.review_status == "needs_review" for row in records) or is_low_score(suggested, total_max),
+            "already_evaluated": True,
+            "questions": len(records),
+            "message": "Saved AI suggestions loaded. Teacher review and publication are still required.",
+        }
+
+    failures = []
+    for row in records:
+        question = questions.get(row.question_id)
+        if question is None:
+            row.evaluation_status = "evaluation_failed"
+            row.review_status = "needs_review"
+            failures.append("A saved answer no longer matches an assessment question.")
+            continue
+
+        if question.question_type == "mcq":
+            marks, correct, status = es.evaluate_mcq_answer(
+                row.selected_option_id, question.correct_option_id, question.max_marks
+            )
+            row.awarded_marks = max(0.0, min(float(question.max_marks), float(marks)))
+            row.is_correct = correct
+            row.evaluation_status = status
+            row.evaluator_version = "deterministic-mcq"
+            row.evaluator_confidence = 1.0
+            row.evaluated_at = get_now()
+            row.review_status = "ai_evaluated"
+            row.rubric_evaluation = json.dumps({
+                "summary": "Graded against the saved correct option.",
+                "feedback": "Correct answer." if correct else "Incorrect or unanswered.",
+                "matched_concepts": [],
+                "missing_concepts": [],
+                "criteria": [],
+            })
+            continue
+
+        student_answer = (row.student_answer or "").strip()
+        reference_answer = (question.reference_answer or "").strip()
+        if not student_answer or len(student_answer.split()) < 2:
+            row.evaluation_status = "evaluation_failed"
+            row.review_status = "needs_review"
+            row.evaluator_confidence = 0.0
+            row.rubric_evaluation = json.dumps({
+                "summary": "A substantive answer is not available for automated evaluation.",
+                "feedback": "Review the original submission manually.",
+                "matched_concepts": [],
+                "missing_concepts": [],
+                "criteria": [],
+            })
+            failures.append("A descriptive answer is empty or too short for reliable evaluation.")
+            continue
+        if len(reference_answer.split()) < 2:
+            row.evaluation_status = "evaluation_failed"
+            row.review_status = "needs_review"
+            row.evaluator_confidence = 0.0
+            row.rubric_evaluation = json.dumps({
+                "summary": "No teacher reference answer is configured.",
+                "feedback": "Add a reference answer and marking rubric before running AI correction.",
+                "matched_concepts": [],
+                "missing_concepts": [],
+                "criteria": [],
+            })
+            failures.append("A reference answer is missing for at least one descriptive question.")
+            continue
+
+        try:
+            student_vector = es.generate_embedding(student_answer)
+            if not question.reference_embedding:
+                question.reference_embedding = es.generate_embedding(reference_answer)
+                db.add(question)
+                db.flush()
+            awarded, similarity, evaluation = es.evaluate_hybrid_descriptive(
+                db, student_answer, question.max_marks, reference_answer,
+                list(question.reference_embedding) if question.reference_embedding else None,
+                rubrics_by_qid.get(question.id, [])
+            )
+            if not isinstance(evaluation, dict) or evaluation.get("fallback_error"):
+                raise RuntimeError("evaluation_unavailable")
+            criteria = evaluation.get("criteria") or []
+            matched = [
+                str(item.get("criterion_text")) for item in criteria
+                if isinstance(item, dict) and item.get("covered") and item.get("criterion_text")
+            ]
+            missing = [
+                str(item.get("criterion_text")) for item in criteria
+                if isinstance(item, dict) and not item.get("covered") and item.get("criterion_text")
+            ]
+            evaluation["matched_concepts"] = matched
+            evaluation["missing_concepts"] = missing
+            evaluation["feedback"] = (
+                "Your answer covers the key ideas."
+                if not missing else "Review the missing criteria: " + ", ".join(missing[:4]) + "."
+            )
+            row.awarded_marks = max(0.0, min(float(question.max_marks), float(awarded)))
+            row.similarity_score = similarity
+            row.student_embedding = student_vector
+            row.evaluation_status = "evaluated"
+            row.evaluator_version = "hybrid-v2-nli"
+            row.evaluator_confidence = evaluation.get("evaluator_confidence")
+            row.evaluated_at = get_now()
+            row.review_status = "ai_evaluated"
+            row.rubric_evaluation = json.dumps(evaluation)
+        except Exception as exc:
+            import logging
+            logging.getLogger("lms.exam_evaluation").warning(
+                "Teacher-triggered correction failed submission_id=%s question_id=%s error_type=%s",
+                submission.id, row.question_id, type(exc).__name__
+            )
+            row.evaluation_status = "evaluation_failed"
+            row.review_status = "needs_review"
+            row.evaluator_confidence = None
+            row.rubric_evaluation = json.dumps({
+                "summary": "Automated evaluation was unavailable.",
+                "feedback": "Retry AI correction or review this answer manually. No new score was fabricated.",
+                "matched_concepts": [],
+                "missing_concepts": [],
+                "criteria": [],
+                "error_type": type(exc).__name__,
+            })
+            failures.append("Automated evaluation failed for one or more descriptive answers.")
+
+    total_max = sum(float(row.max_marks) for row in records)
+    suggested_total = sum(float(row.awarded_marks) for row in records)
+    review_required = bool(failures) or any(row.review_status == "needs_review" for row in records)
+    if is_low_score(suggested_total, total_max):
+        review_required = True
+        for row in records:
+            if row.review_status != "needs_review":
+                row.review_status = "needs_review"
+
+    # Submission.marks is reserved for teacher-approved final marks.
+    submission.marks = None
+    submission.marks_published = False
+    db.commit()
+    record_audit(db, user["id"], "assessment_ai_correction_completed", "submission", submission.id, {
+        "assignment_id": assignment.id,
+        "suggested_marks": round(suggested_total, 2),
+        "max_marks": total_max,
+        "review_required": review_required,
+        "evaluation_failures": len(failures),
+    })
+    return {
+        "submission_id": submission.id,
+        "suggested_marks": round(suggested_total, 2),
+        "max_marks": total_max,
+        "review_required": review_required,
+        "evaluation_failures": len(failures),
+        "message": "AI suggestions saved. Teacher review and publication are still required.",
+        "questions": len(records),
+    }
+
+
 @router.get("/submissions/{submission_id}/evaluation")
 def get_submission_evaluation(submission_id: int, user=Depends(get_user), db: Session = Depends(get_db)):
     submission = db.query(Submission).filter(Submission.id == submission_id).first()

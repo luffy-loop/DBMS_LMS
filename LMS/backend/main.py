@@ -1,3 +1,4 @@
+import re
 import asyncio
 import os
 import time
@@ -454,6 +455,9 @@ async def create_assignment(
     start_time: datetime | None = Form(None),
     end_time: datetime | None = Form(None),
     duration_minutes: int | None = Form(None),
+    reference_answer: str = Form(""),
+    max_marks: int = Form(10),
+    marking_criteria: str = Form(""),
     file: UploadFile | None = File(None),
     user=Depends(get_user),
     db: Session = Depends(get_db)
@@ -468,6 +472,17 @@ async def create_assignment(
         raise HTTPException(status_code=400, detail="Duration must be greater than zero")
     if duration_minutes is not None and not start_time:
         raise HTTPException(status_code=400, detail="Start time is required when duration is set")
+
+    reference_answer = (reference_answer or "").strip()
+    criteria = [line.strip() for line in (marking_criteria or "").splitlines() if line.strip()]
+    if reference_answer and (max_marks < 1 or max_marks > 100):
+        raise HTTPException(status_code=400, detail="AI-assisted correction maximum marks must be between 1 and 100")
+    if len(reference_answer) > 10000:
+        raise HTTPException(status_code=400, detail="Reference answer must be 10,000 characters or fewer")
+    if len(criteria) > 20 or any(len(line) > 300 for line in criteria):
+        raise HTTPException(status_code=400, detail="Provide at most 20 marking criteria, each no longer than 300 characters")
+    if criteria and not reference_answer:
+        raise HTTPException(status_code=400, detail="Add a reference answer before adding marking criteria")
 
     course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
     if not course:
@@ -489,6 +504,31 @@ async def create_assignment(
         duration_minutes=duration_minutes
     )
     db.add(assignment)
+    db.flush()
+
+    ai_question_id = None
+    if reference_answer:
+        from models import AssessmentQuestion, AssessmentQuestionRubric
+        ai_question = AssessmentQuestion(
+            assignment_id=assignment.id,
+            question_text=description.strip() or title.strip(),
+            question_type="descriptive",
+            max_marks=max_marks,
+            order_index=0,
+            reference_answer=reference_answer,
+        )
+        db.add(ai_question)
+        db.flush()
+        ai_question_id = ai_question.id
+        if criteria:
+            criterion_marks = float(max_marks) / len(criteria)
+            for idx, criterion in enumerate(criteria):
+                db.add(AssessmentQuestionRubric(
+                    question_id=ai_question.id,
+                    criterion_text=criterion,
+                    max_marks=criterion_marks,
+                    order_index=idx,
+                ))
     db.commit()
     db.refresh(assignment)
 
@@ -512,7 +552,7 @@ async def create_assignment(
     notify_users(db, student_ids, "assignment_created", f"New assessment", f"{assignment.title} was added to {course.title}.", "assignment", assignment.id)
     record_audit(db, user["id"], "assignment_created", "assignment", assignment.id, {"course_id": course.id, "type": type})
 
-    return {"message": "Assessment created", "id": assignment.id, "title": assignment.title}
+    return {"message": "Assessment created", "id": assignment.id, "title": assignment.title, "ai_grading_enabled": bool(ai_question_id), "ai_question_id": ai_question_id}
 
 def normalize_datetime(dt: datetime | None) -> datetime | None:
     if dt is None:
@@ -552,6 +592,27 @@ async def read_pdf_upload(file: UploadFile) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail="Invalid PDF file")
     try:
         content = await asyncio.to_thread(extract_pdf_text, data)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    return data, content
+
+
+def read_pdf_upload_sync(file: UploadFile) -> tuple[bytes, str]:
+    """Read and validate a submission PDF inside FastAPI's sync worker thread."""
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"", "application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="PDF uploads must use the application/pdf content type")
+    data = file.file.read(max_upload_bytes + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty PDF file")
+    if len(data) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail=f"PDF exceeds the {max_upload_mb} MB upload limit")
+    if b"%PDF-" not in data[:1024]:
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    try:
+        content = extract_pdf_text(data)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid PDF file")
     return data, content
@@ -753,7 +814,7 @@ def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depend
     } for a in assignments]
 
 @app.post("/submissions")
-async def submit_assignment(
+def submit_assignment(
     assignment_id: int = Form(...),
     answer: str = Form(""),
     answers_json: str | None = Form(None),
@@ -787,29 +848,34 @@ async def submit_assignment(
 
     file_data = None
     if file:
-        file_data, _ = await read_pdf_upload(file)
+        file_data, file_content = read_pdf_upload_sync(file)
 
     if not answer.strip() and not file_data and not answers_json:
         raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
 
     from models import AssessmentQuestion
-    has_questions = db.query(AssessmentQuestion).filter(AssessmentQuestion.assignment_id == assignment.id).first() is not None
+    assessment_questions = db.query(AssessmentQuestion).filter(
+        AssessmentQuestion.assignment_id == assignment.id
+    ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
+    has_questions = bool(assessment_questions)
 
     if answers_json or has_questions:
         import json
-        answers_list = []
-        if answers_json:
-            try:
-                answers_list = json.loads(answers_json)
-            except Exception:
-                answers_list = []
-        answers_map = {
-            item.get("question_id"): {
-                "selected_option_id": item.get("selected_option_id"),
-                "student_answer": item.get("student_answer")
-            }
-            for item in answers_list if isinstance(item, dict) and item.get("question_id")
-        }
+        try:
+            answers_map = parse_question_answers(answers_json, {question.id for question in assessment_questions})
+            answers_map, _mapping_status = map_pdf_answers(
+                assessment_questions, answers_map, answer, file_content if file_data else "",
+                readable_pdf=(len((file_content or "").split()) >= 2) if file_data else None,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if "cannot be mapped reliably" in detail:
+                raise HTTPException(status_code=400, detail={
+                    "error": "QUESTION_MAPPING_REQUIRED",
+                    "message": detail + " No submission has been recorded; the selected PDF remains available for retry.",
+                }) from exc
+            raise HTTPException(status_code=400, detail=detail) from exc
+
         try:
             submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
         except HTTPException as exc:
@@ -820,7 +886,7 @@ async def submit_assignment(
                 raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
             raise
         if answer.strip():
-            submission.answer = f"{answer.strip()} | {submission.answer}"
+            submission.answer = answer.strip()
             db.commit()
     else:
         submission = Submission(
@@ -843,8 +909,7 @@ async def submit_assignment(
 
     if file_data:
         try:
-            await asyncio.to_thread(
-                mongo_db.submission_files.insert_one,
+            mongo_db.submission_files.insert_one(
                 {
                     "submission_id": submission.id,
                     "assignment_id": assignment.id,
@@ -859,8 +924,7 @@ async def submit_assignment(
             logger.exception("Submission PDF storage failed submission_id=%s", submission.id)
             mongo_cleanup_ok = True
             try:
-                await asyncio.to_thread(
-                    mongo_db.submission_files.delete_many,
+                mongo_db.submission_files.delete_many(
                     {"submission_id": submission.id}
                 )
             except Exception:
@@ -894,8 +958,74 @@ async def submit_assignment(
                 },
             )
 
-    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
+    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.", "assignment", assignment.id)
     return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
+
+def parse_question_answers(raw_answers: str | None, valid_question_ids: set[int]) -> dict[int, dict]:
+    if not raw_answers:
+        return {}
+    try:
+        items = json.loads(raw_answers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("answers_json must be valid JSON") from exc
+    if not isinstance(items, list):
+        raise ValueError("answers_json must be a JSON array")
+    parsed = {}
+    for item in items:
+        if not isinstance(item, dict) or not item.get("question_id"):
+            raise ValueError("Each answer must include question_id")
+        try:
+            qid = int(item["question_id"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Question IDs must be integers") from exc
+        if qid not in valid_question_ids:
+            raise ValueError(f"Question {qid} does not belong to this assessment")
+        if qid in parsed:
+            raise ValueError(f"Duplicate answer submitted for question {qid}")
+        answer_text = item.get("student_answer", "")
+        if answer_text is not None and not isinstance(answer_text, str):
+            raise ValueError(f"Answer for question {qid} must be text")
+        parsed[qid] = {"selected_option_id": item.get("selected_option_id"), "student_answer": answer_text or ""}
+    return parsed
+
+
+def map_pdf_answers(questions, answers_map, written_answer, pdf_text, readable_pdf: bool | None = None):
+    def field(question, name):
+        return question.get(name) if isinstance(question, dict) else getattr(question, name)
+    mapped = {int(field(q, "id")): dict(answers_map.get(int(field(q, "id")), {})) for q in questions}
+    extracted = (pdf_text or "").strip()
+    readable = len(extracted.split()) >= 2 if readable_pdf is None else readable_pdf
+    if len(questions) == 1 and field(questions[0], "question_type") == "descriptive":
+        qid = int(field(questions[0], "id"))
+        row = mapped.setdefault(qid, {})
+        if not (row.get("student_answer") or "").strip():
+            if (written_answer or "").strip():
+                row["student_answer"] = written_answer.strip()
+                return mapped, "mapped"
+            if readable:
+                row["student_answer"] = extracted
+                return mapped, "mapped"
+            row["manual_review_required"] = True
+            return mapped, "manual_review"
+        return mapped, "question_answer"
+    if not readable:
+        for question in questions:
+            if field(question, "question_type") == "descriptive":
+                qid = int(field(question, "id"))
+                row = mapped.setdefault(qid, {})
+                if not (row.get("student_answer") or "").strip():
+                    row["manual_review_required"] = True
+        return mapped, "manual_review"
+    missing = [
+        int(field(question, "id")) for question in questions
+        if len(questions) > 1
+        and field(question, "question_type") == "descriptive"
+        and not (mapped.get(int(field(question, "id")), {}).get("student_answer") or "").strip()
+    ]
+    if missing:
+        raise ValueError("Readable PDF cannot be mapped reliably to multiple questions; provide question-wise answers. Missing question IDs: " + str(missing))
+    return mapped, "question_wise"
+
 
 def submission_payload(submission, db: Session | None = None):
     file_doc = None
@@ -1021,6 +1151,7 @@ def my_submissions(user=Depends(get_user), db: Session = Depends(get_db)):
 def teacher_assessment_report(
     assignment_id: int,
     response_format: str = "json",
+    section: str | None = None,
     user=Depends(get_user),
     db: Session = Depends(get_db),
 ):
@@ -1037,13 +1168,24 @@ def teacher_assessment_report(
     if user["role"] == "teacher" and assignment.teacher_id != user["id"]:
         raise HTTPException(status_code=403, detail="You can only view reports for your own assessments")
 
-    enrolled = (
-        db.query(User.id, User.name, User.email)
+    available_sections = [
+        row[0] for row in (
+            db.query(User.section)
+            .join(Enrollment, Enrollment.student_id == User.id)
+            .filter(Enrollment.course_id == assignment.course_id, User.role == "student")
+            .distinct()
+            .order_by(User.section)
+            .all()
+        ) if row[0]
+    ]
+    enrolled_query = (
+        db.query(User.id, User.name, User.email, User.section)
         .join(Enrollment, Enrollment.student_id == User.id)
         .filter(Enrollment.course_id == assignment.course_id)
-        .order_by(User.id)
-        .all()
     )
+    if section is not None:
+        enrolled_query = enrolled_query.filter(User.section == section)
+    enrolled = enrolled_query.order_by(User.id).all()
     submissions = db.query(Submission).filter(Submission.assignment_id == assignment.id).all()
     submission_by_student = {item.student_id: item for item in submissions}
     submission_files = {}
@@ -1080,7 +1222,7 @@ def teacher_assessment_report(
     from exam_evaluation import low_score_threshold
     threshold = low_score_threshold()
     students = []
-    for student_id, student_name, email in enrolled:
+    for student_id, student_name, email, section_name in enrolled:
         submission = submission_by_student.get(student_id)
         answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
         question_report = []
@@ -1161,6 +1303,7 @@ def teacher_assessment_report(
             "student_id": student_id,
             "student_name": student_name,
             "student_email": email,
+            "section": section_name or "Unassigned",
             "submission_id": submission.id if submission else None,
             "answer": submission.answer if submission else None,
             "file_id": str(submission_files[submission.id]["_id"]) if submission and submission.id in submission_files else None,
@@ -1181,68 +1324,9 @@ def teacher_assessment_report(
 
     def count_status(*statuses):
         return sum(1 for item in students if item["review_status"] in statuses)
-        submission = submission_by_student.get(student_id)
-        answer_map = answers_by_submission.get(submission.id, {}) if submission else {}
-        question_report = []
-        for question in questions:
-            row = answer_map.get(question.id)
-            evaluation = None
-            if row and row.rubric_evaluation:
-                try:
-                    evaluation = json.loads(row.rubric_evaluation)
-                except (TypeError, ValueError):
-                    evaluation = None
-            criteria = evaluation.get("criteria", []) if isinstance(evaluation, dict) else []
-            matched = sorted({
-                str(term)
-                for criterion in criteria if isinstance(criterion, dict)
-                for term in (criterion.get("matched_concepts") or [])
-                if isinstance(term, (str, int, float))
-            })
-            missing = sorted({
-                str(term)
-                for criterion in criteria if isinstance(criterion, dict)
-                for term in (criterion.get("missing_concepts") or [])
-                if isinstance(term, (str, int, float))
-            })
-            question_report.append({
-                "question_id": question.id,
-                "question": question.question_text,
-                "reference_answer": question.reference_answer,
-                "max_marks": question.max_marks,
-                "student_answer": row.student_answer if row else None,
-                "selected_option_id": row.selected_option_id if row else None,
-                "awarded_marks": (
-                    row.teacher_override_marks if row and row.teacher_override_marks is not None
-                    else row.awarded_marks if row else None
-                ),
-                "feedback": (
-                    row.teacher_review_note if row and row.teacher_review_note
-                    else evaluation.get("feedback") or evaluation.get("summary") if isinstance(evaluation, dict)
-                    else None
-                ),
-                "matched_concepts": matched,
-                "missing_concepts": missing,
-                "review_status": row.review_status if row else ("not_submitted" if not submission else "not_recorded"),
-                "evaluation_status": row.evaluation_status if row else None,
-            })
-        marks = submission.marks if submission else None
-        students.append({
-            "student_id": student_id,
-            "student_name": student_name,
-            "student_email": email,
-            "submission_status": "submitted" if submission else "not_submitted",
-            "submitted_at": submission.created_at.isoformat() if submission and submission.created_at else None,
-            "grading_status": "not_submitted" if not submission else ("graded" if marks is not None else "awaiting_grading"),
-            "marks_status": "available" if marks is not None else "not_available",
-            "total_marks": marks,
-            "max_marks": maximum,
-            "percentage": round((marks / maximum) * 100, 1) if marks is not None and maximum else None,
-            "questions": question_report,
-        })
-
     report = {
         "assignment": {"id": assignment.id, "title": assignment.title, "course_id": assignment.course_id},
+        "sections": available_sections,
         "enrolled_students": len(enrolled),
         "submitted_students": sum(1 for item in students if item["submission_status"] == "submitted"),
         "not_submitted_students": sum(1 for item in students if item["submission_status"] == "not_submitted"),
@@ -1260,27 +1344,45 @@ def teacher_assessment_report(
 
     import csv
     from io import StringIO
-    output = StringIO()
+    course_row = db.query(Course).filter(Course.id == assignment.course_id).first()
+    course_title = course_row.title if course_row else str(assignment.course_id)
+
+    def safe_csv_cell(value):
+        if value is None:
+            return ""
+        text_value = str(value)
+        if text_value.lstrip()[:1] in {"=", "+", "-", "@"}:
+            return "'" + text_value
+        return text_value
+
+    output = StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=[
-        "assignment_id", "assignment_title", "student_id", "student_name", "student_email",
-        "submission_status", "submitted_at", "grading_status", "review_status", "marks_status",
-        "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review", "question_details",
-    ])
+        "Course", "Section", "Assessment", "Roll Number", "Student Name",
+        "Submission Status", "Marks Obtained", "Maximum Marks", "Grading Status",
+        "Student ID", "Assessment ID", "Submitted At",
+    ], lineterminator="\r\n")
     writer.writeheader()
     for student in students:
+        obtained = student["saved_marks"]
         writer.writerow({
-            "assignment_id": assignment.id,
-            "assignment_title": assignment.title,
-            **{key: student[key] for key in (
-                "student_id", "student_name", "student_email", "submission_status",
-                "submitted_at", "grading_status", "review_status", "marks_status",
-                "answer", "file_id", "file_name", "saved_marks", "suggested_marks", "total_marks", "max_marks", "percentage", "needs_review",
-            )},
-            "question_details": json.dumps(student["questions"], ensure_ascii=False),
+            "Course": safe_csv_cell(course_title),
+            "Section": safe_csv_cell(student["section"]),
+            "Assessment": safe_csv_cell(assignment.title),
+            "Roll Number": safe_csv_cell(student["student_email"]),
+            "Student Name": safe_csv_cell(student["student_name"]),
+            "Submission Status": student["submission_status"].replace("_", " ").title(),
+            "Marks Obtained": "" if obtained is None else obtained,
+            "Maximum Marks": student["max_marks"],
+            "Grading Status": student["grading_status"].replace("_", " ").title(),
+            "Student ID": student["student_id"],
+            "Assessment ID": assignment.id,
+            "Submitted At": student["submitted_at"] or "",
         })
-    filename = f"assessment-{assignment.id}-report.csv"
+    filename_base = re.sub(r"[^A-Za-z0-9_-]+", "_", assignment.title).strip("_") or f"assessment_{assignment.id}"
+    section_suffix = f"_section_{re.sub(r'[^A-Za-z0-9_-]+', '_', section).strip('_')}" if section else ""
+    filename = f"{filename_base}{section_suffix}_marks.csv"
     return StreamingResponse(
-        iter([output.getvalue()]),
+        iter(["\ufeff" + output.getvalue()]),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -1524,6 +1626,95 @@ def admin_update_user_role(user_id: int, data: AdminRoleUpdate, user=Depends(get
     db.commit()
     record_audit(db, user["id"], "admin_user_role_changed", "user", target.id, {"from": old_role, "to": target.role})
     return {"id": target.id, "role": target.role, "message": "Role updated"}
+
+@app.get("/admin/marks-overview")
+def admin_marks_overview(
+    course_id: int | None = None,
+    section: str | None = None,
+    assignment_id: int | None = None,
+    status: str | None = None,
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    query = db.query(Assignment).join(Course, Course.id == Assignment.course_id)
+    if course_id is not None:
+        query = query.filter(Assignment.course_id == course_id)
+    if assignment_id is not None:
+        query = query.filter(Assignment.id == assignment_id)
+    assignments = query.order_by(Assignment.course_id, Assignment.id).all()
+    reports = []
+    all_students = []
+    for assignment in assignments:
+        report = teacher_assessment_report(
+            assignment.id, "json", section=section, user=user, db=db
+        )
+        course = db.query(Course).filter(Course.id == assignment.course_id).first()
+        for student in report["students"]:
+            row = {
+                "student_id": student["student_id"],
+                "student_name": student["student_name"],
+                "student_email": student["student_email"],
+                "section": student["section"],
+                "submission_id": student["submission_id"],
+                "submission_status": student["submission_status"],
+                "submitted_at": student["submitted_at"],
+                "grading_status": student["grading_status"],
+                "review_status": student["review_status"],
+                "marks_status": student["marks_status"],
+                "saved_marks": student["saved_marks"],
+                "suggested_marks": student["suggested_marks"],
+                "total_marks": student["total_marks"],
+                "max_marks": student["max_marks"],
+                "percentage": student["percentage"],
+                "needs_review": student["needs_review"],
+                "course_id": assignment.course_id,
+                "course_title": course.title if course else str(assignment.course_id),
+                "assessment_id": assignment.id,
+                "assessment_title": assignment.title,
+            }
+            if status and row["grading_status"] != status:
+                continue
+            all_students.append(row)
+        reports.append({
+            "assessment_id": assignment.id,
+            "assessment_title": assignment.title,
+            "course_id": assignment.course_id,
+            "course_title": course.title if course else str(assignment.course_id),
+            "enrolled_students": report["enrolled_students"],
+            "submitted_students": report["submitted_students"],
+            "not_submitted_students": report["not_submitted_students"],
+            "awaiting_grading": report["awaiting_grading"],
+            "ai_evaluated": report["ai_evaluated"],
+            "needs_review": report["needs_review"],
+            "teacher_reviewed": report["teacher_reviewed"],
+            "published": report["published"],
+            "evaluation_failures": report["evaluation_failures"],
+        })
+    all_courses = db.query(Course).order_by(Course.title).all()
+    all_assignments = db.query(Assignment).order_by(Assignment.title).all()
+    all_sections = [row[0] for row in db.query(User.section).filter(User.role == "student").distinct().order_by(User.section).all() if row[0]]
+    return {
+        "filters": {"course_id": course_id, "section": section, "assignment_id": assignment_id, "status": status},
+        "courses": [{"id": item.id, "title": item.title} for item in all_courses],
+        "sections": all_sections,
+        "available_assessments": [{"id": item.id, "title": item.title, "course_id": item.course_id} for item in all_assignments],
+        "assessments": reports,
+        "students": all_students,
+        "counts": {
+            "enrolled": sum(row["enrolled_students"] for row in reports),
+            "submitted": sum(row["submitted_students"] for row in reports),
+            "not_submitted": sum(row["not_submitted_students"] for row in reports),
+            "awaiting_grading": sum(row["awaiting_grading"] for row in reports),
+            "ai_evaluated": sum(row["ai_evaluated"] for row in reports),
+            "needs_review": sum(row["needs_review"] for row in reports),
+            "teacher_reviewed": sum(row["teacher_reviewed"] for row in reports),
+            "published": sum(row["published"] for row in reports),
+            "evaluation_failures": sum(row["evaluation_failures"] for row in reports),
+        },
+    }
+
 
 @app.get("/admin/submissions")
 def admin_submissions(page: int = 1, page_size: int = 50, user=Depends(get_user), db: Session = Depends(get_db)):
