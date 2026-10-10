@@ -37,6 +37,7 @@ class Assignment(Base):
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
     duration_minutes = Column(Integer, nullable=True)
+    max_marks = Column(Integer, nullable=False, default=10, server_default="10")
     __table_args__ = (
         CheckConstraint("end_time IS NULL OR start_time IS NULL OR end_time > start_time", name="chk_assignment_time"),
         CheckConstraint("duration_minutes IS NULL OR duration_minutes > 0", name="chk_assignment_duration"),
