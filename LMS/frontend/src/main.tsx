@@ -2,8 +2,12 @@ import {StrictMode,lazy,Suspense,useEffect,useState} from "react"
 import {createRoot} from "react-dom/client"
 import {BrowserRouter,Routes,Route,useLocation,useNavigate,Link} from "react-router-dom"
 import {apiJson,clearSession} from "./api"
-import App from "./App"
+import {API} from "./config"
 import "./index.css"
+
+void fetch(`${API}/health`, { cache: "no-store" }).catch(() => {})
+
+const App=lazy(()=>import("./App"))
 const Login=lazy(()=>import("./pages/Login"))
 const Register=lazy(()=>import("./pages/Register"))
 const Dashboard=lazy(()=>import("./pages/Dashboard"))
