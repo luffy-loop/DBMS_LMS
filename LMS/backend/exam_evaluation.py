@@ -602,7 +602,7 @@ def evaluate_and_record_exam(
                             evaluated_at=now,
                             evaluator_version="hybrid-v2-nli",
                             evaluator_confidence=eval_dict.get("evaluator_confidence"),
-                            review_status="ai_evaluated",
+                            review_status="needs_review" if eval_dict.get("review_status") in {"review_required", "review_recommended"} else "ai_evaluated",
                             rubric_evaluation=json.dumps(eval_dict)
                         )
                         total_awarded += sqa.awarded_marks
@@ -937,7 +937,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             row.evaluator_version = "hybrid-v2-nli"
             row.evaluator_confidence = evaluation.get("evaluator_confidence")
             row.evaluated_at = get_now()
-            row.review_status = "ai_evaluated"
+            row.review_status = "needs_review" if evaluation.get("review_status") in {"review_required", "review_recommended"} else "ai_evaluated"
             row.rubric_evaluation = json.dumps(evaluation)
         except Exception as exc:
             import logging

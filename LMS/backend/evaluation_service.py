@@ -325,6 +325,54 @@ SYNONYMS: dict[str, set[str]] = {
 }
 
 
+def calculate_lexical_answer_score(student_answer: str, reference_answer: str) -> float:
+    """
+    Estimate concept overlap for short answers when embedding similarity is too strict.
+    Returns an F1-style score in [0, 1], using meaningful words and known synonyms.
+    """
+    def tokens(value: str) -> list[str]:
+        raw = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", (value or "").lower())
+        result = []
+        for token in raw:
+            if token in STOPWORDS or len(token) < 2:
+                continue
+            if token.endswith("s") and len(token) > 4 and token[:-1] not in STOPWORDS:
+                singular = token[:-1]
+                if singular in {"key", "table", "relation", "identifier", "index", "database"}:
+                    token = singular
+            result.append(token)
+        return result
+
+    student_tokens = tokens(student_answer)
+    reference_tokens = tokens(reference_answer)
+    if not student_tokens or not reference_tokens:
+        return 0.0
+
+    synonym_groups = [set([key, *values]) for key, values in SYNONYMS.items()]
+    def equivalent(token: str) -> set[str]:
+        matches = {token}
+        for group in synonym_groups:
+            if token in group:
+                matches.update(group)
+        return matches
+
+    student_expanded = [equivalent(token) for token in student_tokens]
+    reference_expanded = [equivalent(token) for token in reference_tokens]
+    matched_reference = sum(
+        1 for ref in reference_expanded
+        if any(ref & student for student in student_expanded)
+    )
+    matched_student = sum(
+        1 for student in student_expanded
+        if any(student & ref for ref in reference_expanded)
+    )
+    recall = matched_reference / len(reference_expanded)
+    precision = matched_student / len(student_expanded)
+    if precision + recall <= 0:
+        return 0.0
+    return round(max(0.0, min(1.0, 2 * precision * recall / (precision + recall))), 4)
+
+
 def get_crit_matches(crit_words: list[str], clean_ans: str) -> list[str]:
     stu_tokens = set(re.findall(r"[a-z0-9\-]+", clean_ans.lower()))
     matches = []
@@ -693,8 +741,14 @@ def evaluate_hybrid_descriptive(
             evaluator_confidence = round(avg_crit_conf, 2)
 
     else:
-        # Legacy descriptive evaluation (without rubric)
-        base_marks = calculate_descriptive_marks(overall_sim, question_max_marks, clean_ans)
+        # Legacy descriptive evaluation (without a teacher-authored rubric).
+        # Combine semantic similarity with meaningful-token coverage so concise,
+        # correctly paraphrased answers can receive partial credit.
+        lexical_score = calculate_lexical_answer_score(clean_ans, reference_answer or "")
+        semantic_score = calculate_descriptive_marks(overall_sim, 1.0, clean_ans)
+        evidence_score = max(float(lexical_score), float(semantic_score))
+        base_marks = round(evidence_score * float(question_max_marks), 1)
+
         nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
         legacy_contra = nli_res.get("contradiction", 0.0)
         legacy_entail = nli_res.get("entailment", 0.0)
@@ -711,14 +765,14 @@ def evaluate_hybrid_descriptive(
 
         if contradiction_detected:
             evaluator_confidence = 0.88
-        elif overall_sim >= 0.75 and (legacy_entail >= 0.50 or legacy_contra < 0.10):
-            evaluator_confidence = 0.90
-        elif overall_sim < 0.20:
-            evaluator_confidence = 0.92
-        elif 0.35 <= overall_sim <= 0.65:
+        elif evidence_score < 0.20:
+            evaluator_confidence = 0.35
+        elif evidence_score < 0.45:
             evaluator_confidence = 0.58
+        elif evidence_score >= 0.75 and (legacy_entail >= 0.35 or legacy_contra < 0.10):
+            evaluator_confidence = 0.86
         else:
-            evaluator_confidence = 0.76
+            evaluator_confidence = 0.68
 
     evaluator_confidence = max(0.0, min(1.0, float(evaluator_confidence)))
     if evaluator_confidence >= 0.75:
