@@ -150,3 +150,17 @@ def test_teacher_triggered_ai_correction_endpoint_is_authorized_and_keeps_marks_
     assert 'submission.marks_published = False' in source
     assert 'evaluation_failed' in source
     assert 'No teacher reference answer is configured.' in source
+
+
+def test_assignment_has_persisted_assessment_maximum_marks():
+    from models import Assignment
+    assert Assignment.__table__.c.max_marks.default.arg == 10
+    assert Assignment.__table__.c.max_marks.nullable is False
+
+
+def test_legacy_submission_grading_has_safe_single_question_fallback():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("exam_evaluation.py").read_text(encoding="utf-8")
+    assert "Legacy free-text submissions can be mapped safely" in source
+    assert "len(legacy_questions) != 1" in source
+    assert "Add a reference answer or rubric" in source
