@@ -344,3 +344,94 @@ def test_unrelated_short_answer_is_classified_without_model_fallback():
     question_reference = "STM32CubeIDE is software used to write, compile, debug, and run programs on STM32 microcontrollers."
     wrong_answer = "PPID (Parent Process ID) is the ID of the process that created another process."
     assert calculate_short_answer_overlap(wrong_answer, question_reference) < 0.15
+
+def test_manual_fixture_scores_match_reviewed_ranges_when_models_are_unavailable(monkeypatch):
+    """Run every golden case through the real grader, not just helper functions."""
+    import json
+    from pathlib import Path
+
+    fixture_path = Path(__file__).parent / "fixtures" / "descriptive_grading_cases.json"
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+
+    def unavailable_embedding(_text):
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(es, "generate_embedding", unavailable_embedding)
+
+    failures = []
+    for case in cases:
+        criteria = [
+            SimpleNamespace(
+                id=index + 1,
+                criterion_text=item["criterion"],
+                max_marks=float(item["marks"]),
+                criterion_embedding=None,
+            )
+            for index, item in enumerate(case["rubric"])
+        ]
+        maximum = sum(item["max_marks"] for item in criteria)
+        marks, similarity, result = es.evaluate_hybrid_descriptive(
+            None,
+            case["student_answer"],
+            maximum,
+            case["reference_answer"],
+            None,
+            criteria,
+        )
+        low, high = case["expected_marks_range"]
+        assert 0.0 <= marks <= maximum, case["id"]
+        assert result["review_status"] == "review_required", case["id"]
+        assert result["evaluator_confidence"] <= 0.49, case["id"]
+        assert result["embedding_fallback_used"] is True, case["id"]
+        if not low <= marks <= high:
+            failures.append(
+                f"{case['id']}: awarded {marks}, expected {low}..{high}"
+            )
+
+    assert not failures, "Grading fixture calibration failures:\n" + "\n".join(failures)
+
+
+def test_contrastive_correct_statement_is_not_penalized_as_a_contradiction():
+    answer = "Unlike UDP which is connectionless, TCP is connection-oriented and reliable."
+    reference = "TCP is connection-oriented and reliable."
+
+    detected, details, correctness = es.detect_contradictions_and_correctness(
+        answer, reference, []
+    )
+
+    assert detected is False
+    assert details == []
+    assert correctness == 1.0
+
+
+def test_negated_core_concept_is_penalized_even_with_high_keyword_overlap(monkeypatch):
+    reference = "A primary key uniquely identifies each row in a database table."
+    answer = "A primary key allows duplicate values and does not uniquely identify rows."
+    monkeypatch.setattr(
+        es,
+        "generate_embedding",
+        lambda _text: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+    )
+
+    criteria = [
+        SimpleNamespace(
+            id=1,
+            criterion_text="uniquely identifies each row",
+            max_marks=7.0,
+            criterion_embedding=None,
+        ),
+        SimpleNamespace(
+            id=2,
+            criterion_text="in a database table",
+            max_marks=3.0,
+            criterion_embedding=None,
+        ),
+    ]
+    marks, _, result = es.evaluate_hybrid_descriptive(
+        None, answer, 10, reference, None, criteria
+    )
+
+    assert result["contradiction_detected"] is True
+    assert marks <= 3.0
+    assert result["review_status"] == "review_required"
+
