@@ -439,7 +439,7 @@ def evaluate_and_record_exam(
     - Evaluates all Descriptive questions via pgvector cosine similarity in PostgreSQL.
     - Persists individual student_question_answers and overall submission.
     """
-    now = get_now()
+    now = datetime.now()
     questions = db.query(AssessmentQuestion).filter(
         AssessmentQuestion.assignment_id == assignment.id
     ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
@@ -518,7 +518,7 @@ def evaluate_and_record_exam(
                 rubrics = rubrics_by_qid.get(q.id, [])
 
                 if not clean_ans or len(clean_ans.split()) < 2:
-                    manual_review_required = bool(ans_data.get("manual_review_required"))
+                    # Unanswered or empty descriptive response -> 0 marks
                     empty_eval = {
                         "evaluator_version": "hybrid-v2-nli",
                         "embedding_model": "all-MiniLM-L6-v2",
@@ -527,9 +527,8 @@ def evaluate_and_record_exam(
                         "overall_correctness": 0.0,
                         "contradiction_detected": False,
                         "contradiction_details": [],
-                        "evaluator_confidence": 0.0 if manual_review_required else 0.99,
-                        "review_status": "needs_review" if manual_review_required else "auto_finalized",
-                        "feedback": "PDF text could not be extracted reliably. Please review the uploaded file manually." if manual_review_required else "No substantive answer was provided.",
+                        "evaluator_confidence": 0.99,
+                        "review_status": "auto_finalized",
                         "criteria": []
                     }
                     sqa = StudentQuestionAnswer(
@@ -543,11 +542,11 @@ def evaluate_and_record_exam(
                         similarity_score=0.0,
                         awarded_marks=0.0,
                         max_marks=q.max_marks,
-                        evaluation_status="evaluation_failed" if manual_review_required else ("unanswered" if not clean_ans else "evaluated"),
+                        evaluation_status="unanswered" if not clean_ans else "evaluated",
                         evaluated_at=now,
                         evaluator_version="hybrid-v2-nli",
-                        evaluator_confidence=0.0 if manual_review_required else 0.99,
-                        review_status="needs_review" if manual_review_required else "auto_finalized",
+                        evaluator_confidence=0.99,
+                        review_status="auto_finalized",
                         rubric_evaluation=json.dumps(empty_eval)
                     )
                     db.add(sqa)
@@ -638,8 +637,7 @@ def evaluate_and_record_exam(
             for row in recorded_answers:
                 if row.review_status != "evaluation_failed":
                     row.review_status = "needs_review"
-        # Aggregate AI marks remain suggestions on question rows until a teacher reviews.
-        submission.marks = None
+        submission.marks = None if failed_evaluation else rounded_marks
         submission.marks_published = False
         submission.graded_by = None
         submission.graded_at = None
@@ -715,15 +713,7 @@ def submit_exam(assignment_id: int, data: ExamSubmissionCreate, user=Depends(get
         for ans in data.answers
     }
 
-    try:
-        submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
-    except HTTPException as exc:
-        if exc.status_code == 500 and db.query(Submission.id).filter(
-            Submission.assignment_id == assignment.id,
-            Submission.student_id == user["id"],
-        ).first():
-            raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
-        raise
+    submission, recorded_answers = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
 
     total_max = sum(q.max_marks for q in questions)
 

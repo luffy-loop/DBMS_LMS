@@ -11,6 +11,18 @@ from notification_service import notify_users
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+
+def _notification_href(item, user):
+    if item.entity_type == "assignment" and item.entity_id:
+        if item.notification_type == "submission_received" and user.get("role") in {"teacher", "admin"}:
+            return "/marks?assignment_id=" + str(item.entity_id)
+        if item.notification_type == "marks_published":
+            return "/marks"
+        return "/assignments?assignment_id=" + str(item.entity_id)
+    if item.entity_type in {"resource", "course"}:
+        return "/courses"
+    return None
+
 def _ensure_deadline_notifications(user_id, db):
     if not user_id:
         return
@@ -83,7 +95,7 @@ def list_notifications(
                 "created_at": item.created_at.isoformat(),
                 "entity_type": item.entity_type,
                 "entity_id": item.entity_id,
-                "href": ("/assignments?assignment_id=" + item.entity_id) if item.entity_type == "assignment" else ("/courses" if item.entity_type == "resource" else None),
+                "href": _notification_href(item, user),
             }
             for item in rows
         ],

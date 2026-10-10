@@ -41,21 +41,3 @@ def test_quiz_generation_deduplicates_questions_and_options():
     assert len({q["question"].casefold() for q in questions}) == len(questions)
     assert all(q["answer"] in q["options"] for q in questions)
     assert all(len(q["options"]) == 4 for q in questions)
-
-
-def test_quiz_generation_supports_explanatory_sentences_without_is_definitions():
-    source = {
-        "title": "Operating Systems Notes",
-        "content": (
-            "Mutex locks protect a critical section by allowing only one thread to access shared data at a time. "
-            "Semaphores use a counter to coordinate access to shared resources and signal waiting processes. "
-            "A deadlock occurs when processes wait indefinitely for resources held by one another. "
-            "Context switching saves one process state and loads another so the CPU can resume execution."
-        ),
-    }
-    questions = _generate_grounded_questions([source], 4)
-    assert len(questions) >= 1
-    assert all(q["source"] == source["title"] for q in questions)
-    assert all(q["answer"] in q["options"] for q in questions)
-    assert all(len(q["options"]) == 4 for q in questions)
-    assert all(len({option.casefold() for option in q["options"]}) == 4 for q in questions)

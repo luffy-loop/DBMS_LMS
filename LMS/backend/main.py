@@ -958,7 +958,7 @@ def submit_assignment(
                 },
             )
 
-    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.")
+    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.", "assignment", assignment.id)
     return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
 
 def parse_question_answers(raw_answers: str | None, valid_question_ids: set[int]) -> dict[int, dict]:
