@@ -255,3 +255,50 @@ def test_dsa_sequence_alignment_is_bounded_and_handles_empty_input():
         "A primary key uniquely identifies each row in a database table",
     )
     assert 0.0 <= score <= 1.0
+
+
+def test_contradictory_keyword_overlap_is_penalized_and_reviewable_without_models(monkeypatch):
+    reference = "A primary key uniquely identifies each row in a database table."
+    answer = "A primary key allows duplicate values and does not uniquely identify rows."
+    monkeypatch.setattr(
+        es, "generate_embedding",
+        lambda text: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+    )
+    marks, similarity, result = es.evaluate_hybrid_descriptive(
+        None, answer, 10, reference, None, []
+    )
+
+    assert 0 <= marks <= 3
+    assert result["contradiction_detected"] is True
+    assert result["contradiction_details"]
+    assert result["overall_correctness"] < 1.0
+    assert result["review_status"] == "review_required"
+    assert result["embedding_fallback_used"] is True
+    assert result["evaluator_confidence"] <= 0.49
+
+
+def test_expanded_fixture_covers_paraphrase_partial_irrelevant_and_keyword_traps():
+    import json
+    from pathlib import Path
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "descriptive_grading_cases.json").read_text(encoding="utf-8")
+    )
+    cases = {case["id"]: case for case in fixture["cases"]}
+    required = {
+        "primary-key-paraphrase",
+        "primary-key-partial",
+        "primary-key-irrelevant",
+        "primary-key-contradiction",
+        "primary-key-keyword-overlap-wrong",
+        "deadlock-paraphrase",
+        "deadlock-keyword-overlap-wrong",
+        "deadlock-partial",
+    }
+    assert required.issubset(cases)
+    for case_id in required:
+        case = cases[case_id]
+        low, high = case["expected_marks_range"]
+        assert 0 <= low <= high <= sum(item["marks"] for item in case["rubric"])
+        assert case["review_note"].strip()
+

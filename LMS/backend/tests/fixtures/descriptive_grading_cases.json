@@ -1,6 +1,6 @@
 {
   "title": "Small manually reviewed descriptive grading regression fixture",
-  "purpose": "Qualitative regression cases only; these four cases do not establish statistical grading accuracy.",
+  "purpose": "Qualitative regression cases only; these manually reviewed cases do not establish statistical grading accuracy.",
   "cases": [
     {
       "id": "primary-key-paraphrase",
@@ -85,6 +85,102 @@
         3
       ],
       "review_note": "Contains an explicit contradiction; the evaluator must flag for teacher review."
+    },
+    {
+      "question": "What does a primary key do?",
+      "reference_answer": "A primary key uniquely identifies each row in a database table.",
+      "rubric": [
+        {
+          "criterion": "uniquely identifies each row",
+          "marks": 7
+        },
+        {
+          "criterion": "in a database table",
+          "marks": 3
+        }
+      ],
+      "id": "primary-key-keyword-overlap-wrong",
+      "student_answer": "A primary key allows duplicate values and does not uniquely identify rows.",
+      "expected_marks_range": [
+        0,
+        3
+      ],
+      "review_note": "Shares important vocabulary but explicitly reverses the defining property; must be flagged for teacher review."
+    },
+    {
+      "id": "deadlock-paraphrase",
+      "question": "What is a deadlock in operating systems?",
+      "reference_answer": "A deadlock is a condition in which two or more processes wait indefinitely for resources held by one another, preventing further execution.",
+      "rubric": [
+        {
+          "criterion": "two or more processes wait indefinitely",
+          "marks": 4
+        },
+        {
+          "criterion": "for resources held by one another",
+          "marks": 4
+        },
+        {
+          "criterion": "preventing further execution",
+          "marks": 2
+        }
+      ],
+      "student_answer": "Two or more processes wait for each other forever, so none of them can continue.",
+      "expected_marks_range": [
+        7,
+        10
+      ],
+      "review_note": "Equivalent paraphrase preserves the core concept while omitting the explicit word resources; teacher review remains required in fallback mode."
+    },
+    {
+      "id": "deadlock-keyword-overlap-wrong",
+      "question": "What is a deadlock in operating systems?",
+      "reference_answer": "A deadlock is a condition in which two or more processes wait indefinitely for resources held by one another, preventing further execution.",
+      "rubric": [
+        {
+          "criterion": "two or more processes wait indefinitely",
+          "marks": 4
+        },
+        {
+          "criterion": "for resources held by one another",
+          "marks": 4
+        },
+        {
+          "criterion": "preventing further execution",
+          "marks": 2
+        }
+      ],
+      "student_answer": "A deadlock is when processes finish quickly and release all resources so execution continues normally.",
+      "expected_marks_range": [
+        0,
+        3
+      ],
+      "review_note": "Uses overlapping topic words but describes the opposite of indefinite waiting; do not treat vocabulary overlap alone as correctness."
+    },
+    {
+      "id": "deadlock-partial",
+      "question": "What is a deadlock in operating systems?",
+      "reference_answer": "A deadlock is a condition in which two or more processes wait indefinitely for resources held by one another, preventing further execution.",
+      "rubric": [
+        {
+          "criterion": "two or more processes wait indefinitely",
+          "marks": 4
+        },
+        {
+          "criterion": "for resources held by one another",
+          "marks": 4
+        },
+        {
+          "criterion": "preventing further execution",
+          "marks": 2
+        }
+      ],
+      "student_answer": "A process waits for a resource and gets stuck.",
+      "expected_marks_range": [
+        1,
+        5
+      ],
+      "review_note": "Recognizes waiting and a resource but misses multiple processes and the circular dependency; partial credit only."
     }
   ]
 }
