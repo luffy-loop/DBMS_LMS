@@ -164,3 +164,17 @@ def test_legacy_submission_grading_has_safe_single_question_fallback():
     assert "Legacy free-text submissions can be mapped safely" in source
     assert "len(legacy_questions) != 1" in source
     assert "Add a reference answer or rubric" in source
+
+
+
+def test_student_submission_saves_answers_without_running_heavy_ai_in_request():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("main.py").read_text(encoding="utf-8")
+    start = source.index('@app.post("/submissions")')
+    end = source.index("def parse_question_answers", start)
+    endpoint = source[start:end]
+    assert "evaluate_and_record_exam(" not in endpoint
+    assert 'evaluation_status="pending"' in endpoint
+    assert "StudentQuestionAnswer(" in endpoint
+    assert "background_tasks.add_task(" in endpoint
+    assert "allow_origin_regex" in source
