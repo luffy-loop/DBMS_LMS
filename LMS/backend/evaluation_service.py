@@ -325,6 +325,12 @@ SYNONYMS: dict[str, set[str]] = {
 }
 
 
+def _item_value(item, key: str, default=None):
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
 def calculate_lexical_answer_score(student_answer: str, reference_answer: str) -> float:
     """
     Estimate concept overlap for short answers when embedding similarity is too strict.
@@ -546,7 +552,7 @@ def evaluate_hybrid_descriptive(
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_ans) if len(s.strip().split()) >= 2]
     sentence_vecs = [generate_embedding(s) for s in sentences] if sentences else []
 
-    criteria_texts = [getattr(c, "criterion_text", c.get("criterion_text", "")) for c in rubric_criteria]
+    criteria_texts = [_item_value(c, "criterion_text", "") for c in rubric_criteria]
 
     # Contradiction and factual correctness check
     contradiction_detected, contradiction_details, overall_correctness = detect_contradictions_and_correctness(
@@ -558,10 +564,10 @@ def evaluate_hybrid_descriptive(
 
     if rubric_criteria and len(rubric_criteria) > 0:
         for c in rubric_criteria:
-            crit_id = getattr(c, "id", c.get("id"))
-            crit_text = getattr(c, "criterion_text", c.get("criterion_text", ""))
-            crit_max = float(getattr(c, "max_marks", c.get("max_marks", 1.0)))
-            crit_emb = getattr(c, "criterion_embedding", c.get("criterion_embedding", None))
+            crit_id = _item_value(c, "id")
+            crit_text = _item_value(c, "criterion_text", "")
+            crit_max = float(_item_value(c, "max_marks", 1.0))
+            crit_emb = _item_value(c, "criterion_embedding")
 
             if not crit_emb:
                 crit_emb = generate_embedding(crit_text)
@@ -685,7 +691,19 @@ def evaluate_hybrid_descriptive(
                     crit_confidence = 0.88 if effective_sim < 0.20 else 0.50
 
                 score_ratio = max(0.0, min(1.0, score_ratio))
-                awarded_marks = round(score_ratio * crit_max, 2)
+
+            # Lexical concept coverage supplements embeddings for close paraphrases.
+            # Never use this fallback to override an explicit contradiction.
+            lexical_ratio = calculate_lexical_answer_score(clean_ans, crit_text)
+            if not is_crit_contradicted and lexical_ratio >= 0.50:
+                score_ratio = max(score_ratio, lexical_ratio)
+                covered = score_ratio >= 0.50
+                if lexical_ratio >= 0.75:
+                    crit_confidence = max(crit_confidence, 0.80)
+                else:
+                    crit_confidence = max(crit_confidence, 0.60)
+
+            awarded_marks = round(score_ratio * crit_max, 2)
 
             criteria_eval_list.append({
                 "criterion_id": crit_id,
