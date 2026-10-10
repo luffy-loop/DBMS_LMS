@@ -54,7 +54,11 @@ async def startup():
         from alembic.config import Config
         command.upgrade(Config("alembic.ini"), "head")
 
-    await asyncio.to_thread(run_migrations)
+    try:
+        await asyncio.to_thread(run_migrations)
+    except Exception:
+        logger.exception("Database migrations failed during startup; refusing to start with an unknown schema state")
+        raise
     try:
         mongo_db.resources.create_index("assignment_id")
         mongo_db.resources.create_index("course_id")
@@ -67,14 +71,21 @@ async def startup():
 slow_request_ms = float(os.getenv("SLOW_REQUEST_MS", "150"))
 max_upload_mb = max(1, int(os.getenv("MAX_UPLOAD_MB", "10")))
 max_upload_bytes = max_upload_mb * 1024 * 1024
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:5173,https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app,https://frontend-plum-mu-90.vercel.app,https://frontend-poojasrikandhula-6164s-projects.vercel.app,https://frontend-git-main-poojasrikandhula-6164s-projects.vercel.app"
-    ).split(",")
+# Keep known frontend origins enabled even when Render has CORS_ORIGINS set.
+# The environment variable extends this allowlist instead of replacing it.
+default_cors_origins = {
+    "http://localhost:5173",
+    "https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app",
+    "https://frontend-plum-mu-90.vercel.app",
+    "https://frontend-poojasrikandhula-6164s-projects.vercel.app",
+    "https://frontend-git-main-poojasrikandhula-6164s-projects.vercel.app",
+}
+configured_cors_origins = {
+    origin.strip().rstrip("/")
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
     if origin.strip()
-]
+}
+cors_origins = sorted(default_cors_origins | configured_cors_origins)
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
