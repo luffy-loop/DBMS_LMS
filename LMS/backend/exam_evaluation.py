@@ -1006,7 +1006,8 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             row.evaluator_version = "hybrid-v2-nli"
             row.evaluator_confidence = evaluation.get("evaluator_confidence")
             row.evaluated_at = get_now()
-            row.review_status = "needs_review" if evaluation.get("review_status") in {"review_required", "review_recommended"} else "ai_evaluated"
+            # Every AI-generated score remains a suggestion until a teacher reviews it.
+            row.review_status = "needs_review"
             row.rubric_evaluation = json.dumps(evaluation)
         except Exception as exc:
             import logging
@@ -1206,17 +1207,19 @@ def review_submission(
         sqa.reviewed_at = now
         sqa.reviewed_by = user["id"]
 
-    # Server-authoritative total marks recalculation
+    # A partial review must not finalize a submission total.
     total_max = sum(r.max_marks for r in records)
+    all_reviewed = bool(records) and all(r.review_status == "reviewed" for r in records)
     total_awarded = sum(
         (r.teacher_override_marks if r.teacher_override_marks is not None else r.awarded_marks)
         for r in records
     )
-    rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2)
+    rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2) if all_reviewed else None
     submission.marks = rounded_marks
     submission.marks_published = False
-    submission.graded_by = user["id"]
-    submission.graded_at = now
+    if all_reviewed:
+        submission.graded_by = user["id"]
+        submission.graded_at = now
     submission.teacher_review_note = "; ".join(
         item.review_note.strip() for item in data.reviews if item.review_note and item.review_note.strip()
     )[:2000] or submission.teacher_review_note
@@ -1227,14 +1230,16 @@ def review_submission(
         "assignment_id": assignment.id,
         "total_marks": rounded_marks,
         "max_marks": total_max,
+        "all_questions_reviewed": all_reviewed,
     })
 
     return {
-        "message": "Submission evaluation reviewed and updated successfully",
+        "message": "Submission evaluation reviewed and updated successfully" if all_reviewed else "Review saved. Final marks remain unset until every question is reviewed.",
         "submission_id": submission.id,
         "total_marks": submission.marks,
         "max_marks": total_max,
-        "review_status": "reviewed",
+        "all_questions_reviewed": all_reviewed,
+        "review_status": "reviewed" if all_reviewed else "review_in_progress",
         "reviewed_at": now.isoformat()
     }
 
