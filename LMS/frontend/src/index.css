@@ -262,6 +262,13 @@ select option{background:#101522;color:#fff}
 .lms-date-native{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
 .lms-date-clear{position:absolute;right:3.3rem;top:50%;transform:translateY(-50%);font-size:1.15rem;color:rgba(255,255,255,.35);transition:.2s ease}
 .lms-date-clear:hover{color:#fff}
+/* Native date/time controls avoid custom select overflow across browsers. */
+.lms-datetime-card{width:100%;min-width:0}
+.lms-date-native-row,.lms-time-native-row{display:grid;grid-template-columns:1.25rem minmax(0,1fr);align-items:center;gap:.65rem;min-width:0}
+.lms-input.lms-native-date,.lms-input.lms-native-time{display:block;width:100%;min-width:0;max-width:100%;height:3rem;padding:.65rem .75rem;color-scheme:dark;font-size:1rem}
+.lms-input.lms-native-date::-webkit-calendar-picker-indicator,.lms-input.lms-native-time::-webkit-calendar-picker-indicator{opacity:.8;cursor:pointer}
+@media(max-width:420px){.lms-datetime-card{padding:.65rem}.lms-input.lms-native-date,.lms-input.lms-native-time{padding:.55rem;font-size:.9rem}}
+
 .lms-upload-zone{display:flex;min-height:66px;align-items:center;gap:1rem;border:1px dashed rgba(167,139,250,.22);border-radius:1rem;background:linear-gradient(145deg,rgba(139,92,246,.06),rgba(255,255,255,.025));padding:.75rem;cursor:pointer;transition:.2s ease}
 .lms-upload-zone:hover{border-color:rgba(167,139,250,.5);background:linear-gradient(145deg,rgba(139,92,246,.10),rgba(34,211,238,.035));transform:translateY(-1px)}
 .lms-upload-button{display:inline-flex;align-items:center;gap:.5rem;border-radius:.75rem;background:linear-gradient(135deg,#8b5cf6,#4f46e5);padding:.65rem .9rem;font-size:.82rem;font-weight:600;color:#fff;box-shadow:0 8px 24px rgba(109,40,217,.20)}
