@@ -114,3 +114,26 @@ def test_login_401_does_not_clear_existing_session_and_logout_is_deduplicated():
     source = open("../frontend/src/api.ts", encoding="utf-8").read()
     assert 'if(path==="/login"||path==="/register"||!token||invalidatedToken===token)return' in source
     assert 'invalidateSessionFor401(path,token)' in source
+
+
+def test_low_score_review_threshold_uses_unrounded_exact_boundary():
+    from exam_evaluation import is_low_score
+
+    for awarded, maximum, expected in [
+        (0, 100, True),
+        (24, 100, True),
+        (24.99, 100, True),
+        (25, 100, False),
+        (26, 100, False),
+        (9, 40, True),
+        (10, 40, False),
+        (24.999, 100, True),
+    ]:
+        assert is_low_score(awarded, maximum) is expected
+
+
+def test_low_score_review_threshold_rejects_invalid_maximum_safely():
+    from exam_evaluation import is_low_score
+
+    assert is_low_score(0, 0) is False
+    assert is_low_score(0, -1) is False

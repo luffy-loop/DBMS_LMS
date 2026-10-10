@@ -44,10 +44,16 @@ def low_score_threshold() -> float:
 
 
 def is_low_score(awarded: float, maximum: float, threshold: float | None = None) -> bool:
-    if maximum <= 0:
+    from decimal import Decimal, InvalidOperation
+    try:
+        awarded_value = Decimal(str(awarded))
+        maximum_value = Decimal(str(maximum))
+        limit = Decimal(str(low_score_threshold() if threshold is None else min(100.0, max(0.0, float(threshold)))))
+    except (InvalidOperation, TypeError, ValueError):
+        return True
+    if not awarded_value.is_finite() or not maximum_value.is_finite() or maximum_value <= 0:
         return False
-    limit = low_score_threshold() if threshold is None else min(100.0, max(0.0, float(threshold)))
-    return (float(awarded) / float(maximum)) * 100 < limit
+    return awarded_value < maximum_value * limit / Decimal("100")
 
 
 get_utc_now = get_now
@@ -634,7 +640,7 @@ def evaluate_and_record_exam(
         total_max = sum(q.max_marks for q in questions)
         rounded_marks = round(min(float(total_max), max(0.0, float(total_awarded))), 2)
         failed_evaluation = any(row.evaluation_status == "evaluation_failed" for row in recorded_answers)
-        if total_max > 0 and is_low_score(rounded_marks, total_max):
+        if total_max > 0 and is_low_score(total_awarded, total_max):
             for row in recorded_answers:
                 if row.review_status != "evaluation_failed":
                     row.review_status = "needs_review"
