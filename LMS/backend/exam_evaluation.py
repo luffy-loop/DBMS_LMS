@@ -959,9 +959,11 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             failures.append("Automated evaluation failed for one or more descriptive answers.")
 
     total_max = sum(float(row.max_marks) for row in records)
-    suggested_total = sum(float(row.awarded_marks) for row in records)
+    scored_records = [row for row in records if row.evaluation_status not in {"evaluation_failed", "pending"}]
+    score_available = bool(scored_records)
+    suggested_total = sum(float(row.awarded_marks) for row in scored_records)
     review_required = bool(failures) or any(row.review_status == "needs_review" for row in records)
-    if is_low_score(suggested_total, total_max):
+    if score_available and is_low_score(suggested_total, total_max):
         review_required = True
         for row in records:
             if row.review_status != "needs_review":
@@ -969,21 +971,23 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
 
     # AI evaluation only updates question-level suggestions and review state.
     # Preserve any teacher-finalized marks and publication state during re-evaluation.
+    # A failed evaluation is not a zero-mark answer: do not report a score when no
+    # question was evaluated successfully.
     db.commit()
     record_audit(db, user["id"], "assessment_ai_correction_completed", "submission", submission.id, {
         "assignment_id": assignment.id,
-        "suggested_marks": round(suggested_total, 2),
+        "suggested_marks": round(suggested_total, 2) if score_available else None,
         "max_marks": total_max,
         "review_required": review_required,
         "evaluation_failures": len(failures),
     })
     return {
         "submission_id": submission.id,
-        "suggested_marks": round(suggested_total, 2),
+        "suggested_marks": round(suggested_total, 2) if score_available else None,
         "max_marks": total_max,
         "review_required": review_required,
         "evaluation_failures": len(failures),
-        "message": "AI suggestions saved. Teacher review and publication are still required.",
+        "message": "AI suggestions saved. Teacher review and publication are still required." if score_available else "AI evaluation did not produce a reliable score. No marks were awarded; review the recorded failure reason and grade manually or retry.",
         "questions": len(records),
     }
 
