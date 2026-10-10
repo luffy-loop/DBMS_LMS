@@ -1895,7 +1895,7 @@ async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):
 app = CORSMiddleware(
     app=app,
     allow_origins=cors_origins,
-    allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\\.vercel\\.app$".replace(r"\\.", r"\."),
+    allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.vercel\.app$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
