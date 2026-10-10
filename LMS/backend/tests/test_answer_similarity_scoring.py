@@ -369,7 +369,7 @@ def test_manual_fixture_scores_match_reviewed_ranges_when_models_are_unavailable
             )
             for index, item in enumerate(case["rubric"])
         ]
-        maximum = sum(item["max_marks"] for item in criteria)
+        maximum = sum(item.max_marks for item in criteria)
         marks, similarity, result = es.evaluate_hybrid_descriptive(
             None,
             case["student_answer"],
