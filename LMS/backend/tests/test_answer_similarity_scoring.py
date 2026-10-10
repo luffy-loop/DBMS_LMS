@@ -75,7 +75,7 @@ def test_concise_correct_answer_matches_sentence_in_detailed_reference():
     )
     reference_parts = [
         part.strip()
-        for part in __import__("re").split(r"(?<=[.!?])\\s+", reference)
+        for part in __import__("re").split(r"(?<=[.!?])\s+", reference)
         if len(part.split()) >= 3
     ]
     score = max(
