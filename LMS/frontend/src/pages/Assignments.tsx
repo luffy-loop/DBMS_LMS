@@ -27,81 +27,33 @@ function Field({label,children}:{label:string;children:React.ReactNode}){return 
 
 function DateTimeField({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}){
  const [date,setDate]=useState(value.split("T")[0]||"")
- const [hour,setHour]=useState(value.split("T")[1]?.slice(0,2)?String(Number(value.split("T")[1].slice(0,2))%12||12).padStart(2,"0"):"09")
- const [minute,setMinute]=useState(value.split("T")[1]?.slice(3,5)||"00")
- const [period,setPeriod]=useState(Number(value.split("T")[1]?.slice(0,2)||"9")>=12?"PM":"AM")
- const [open,setOpen]=useState(false)
- const [view,setView]=useState(()=>{
-  const d=value?new Date(value+"T12:00:00"):new Date()
-  return new Date(d.getFullYear(),d.getMonth(),1)
- })
- const root=useRef<HTMLDivElement>(null)
+ const [time,setTime]=useState(value.split("T")[1]?.slice(0,5)||"09:00")
  useEffect(()=>{
-  if(!value){setDate("");return}
-  const [d,t]=value.split("T")
-  setDate(d||"")
-  if(t){
-   const h=Number(t.slice(0,2))
-   setHour(String(h%12||12).padStart(2,"0"))
-   setMinute(t.slice(3,5)||"00")
-   setPeriod(h>=12?"PM":"AM")
-   const selected=new Date(d+"T12:00:00")
-   if(!Number.isNaN(selected.getTime()))setView(new Date(selected.getFullYear(),selected.getMonth(),1))
-  }
+  const [nextDate,nextTime]=value.split("T")
+  setDate(nextDate||"")
+  if(nextTime)setTime(nextTime.slice(0,5))
  },[value])
- useEffect(()=>{
-  if(!open)return
-  const outside=(event:PointerEvent)=>{if(root.current&&!root.current.contains(event.target as Node))setOpen(false)}
-  const escape=(event:KeyboardEvent)=>{if(event.key==="Escape")setOpen(false)}
-  document.addEventListener("pointerdown",outside)
-  document.addEventListener("keydown",escape)
-  return()=>{document.removeEventListener("pointerdown",outside);document.removeEventListener("keydown",escape)}
- },[open])
- function emit(d:string,h:string,m:string,p:string){
-  if(!d){onChange("");return}
-  const h24=(Number(h)%12)+(p==="PM"?12:0)
-  onChange(d+"T"+String(h24).padStart(2,"0")+":"+m)
+ function updateDate(nextDate:string){
+  setDate(nextDate)
+  onChange(nextDate?(nextDate+"T"+(time||"09:00")):"")
  }
- function chooseDay(day:number){
-  const d=view.getFullYear()+"-"+String(view.getMonth()+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")
-  setDate(d);setOpen(false)
-  const nextHour=hour||"09",nextMinute=minute||"00",nextPeriod=period||"AM"
-  setHour(nextHour);setMinute(nextMinute);setPeriod(nextPeriod)
-  emit(d,nextHour,nextMinute,nextPeriod)
+ function updateTime(nextTime:string){
+  setTime(nextTime)
+  if(date)onChange(date+"T"+(nextTime||"09:00"))
  }
- function chooseToday(){
-  const d=new Date()
-  const key=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")
-  setView(new Date(d.getFullYear(),d.getMonth(),1));setDate(key);setOpen(false)
-  const h=hour||"09",m=minute||"00",p=period||"AM"
-  setHour(h);setMinute(m);setPeriod(p);emit(key,h,m,p)
- }
- const dateLabel=date?(()=>{const [y,m,d]=date.split("-");return d+"-"+m+"-"+y})():"Select date"
- const year=view.getFullYear(),month=view.getMonth()
- const monthLabel=view.toLocaleDateString("en-US",{month:"long",year:"numeric"})
- const firstDay=(new Date(year,month,1).getDay()+6)%7
- const dayCount=new Date(year,month+1,0).getDate()
- const today=new Date()
- const todayKey=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0")
- const days=[...Array(firstDay).fill(0),...Array.from({length:dayCount},(_,i)=>i+1)]
- return <div className="block min-w-0" ref={root}>
-  <span className="mb-2 block text-sm text-white/60">{label}</span>
-  <div className="relative rounded-xl border border-white/10 bg-white/[0.035] p-3 transition-colors focus-within:border-violet-400/60">
-   <button type="button" aria-label={label+" date"} aria-haspopup="dialog" aria-expanded={open} onClick={()=>setOpen(v=>!v)} className="lms-input flex w-full min-w-0 items-center gap-2 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400">
-    <CalendarDays size={16} className="shrink-0 text-violet-300"/><span className={date?"flex-1":"flex-1 text-white/45"}>{dateLabel}</span><ChevronLeft size={14} className="rotate-[-90deg] text-white/45"/>
-   </button>
-   {open&&<div role="dialog" aria-label={label+" calendar"} className="absolute left-0 right-0 top-[calc(100%+8px)] z-[90] min-w-[17rem] rounded-2xl border border-violet-300/20 bg-[#101522] p-3 shadow-2xl sm:left-auto sm:w-[18rem]">
-    <div className="flex items-center justify-between gap-2 px-1 pb-3">
-     <button type="button" aria-label="Previous month" onClick={()=>setView(new Date(year,month-1,1))} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"><ChevronLeft size={17}/></button>
-     <p className="text-sm font-semibold text-white">{monthLabel}</p>
-     <button type="button" aria-label="Next month" onClick={()=>setView(new Date(year,month+1,1))} className="flex h-8 w-8 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"><ChevronRight size={17}/></button>
-    </div>
-    <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-white/40">{["Mo","Tu","We","Th","Fr","Sa","Su"].map(day=><span key={day} className="py-1">{day}</span>)}</div>
-    <div className="mt-1 grid grid-cols-7 gap-1">{days.map((day,index)=>day===0?<span key={"blank-"+index}/>:<button key={day} type="button" aria-label={year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")} aria-pressed={date===year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")} onClick={()=>chooseDay(day)} className={"flex aspect-square items-center justify-center rounded-lg text-xs transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 "+(date===year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")?"bg-violet-500 font-semibold text-white shadow":"")+(todayKey===year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")&&date!==year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")?" ring-1 ring-violet-300 text-violet-200":"")+(date!==year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")&&todayKey!==year+"-"+String(month+1).padStart(2,"0")+"-"+String(day).padStart(2,"0")?" text-white/80 hover:bg-white/10":"")}>{day}</button>)}</div>
-    <div className="mt-3 flex justify-between border-t border-white/10 pt-3"><button type="button" onClick={chooseToday} className="text-xs text-violet-300 hover:text-white">Today</button><button type="button" onClick={()=>{setDate("");onChange("");setOpen(false)}} className="text-xs text-white/45 hover:text-white">Clear date</button></div>
-   </div>}
-   <div className="mt-3 flex min-w-0 items-center gap-2"><Clock size={16} className="shrink-0 text-violet-300"/><select aria-label={label+" hour"} value={hour} disabled={!date} onChange={e=>{setHour(e.target.value);emit(date,e.target.value,minute,period)}} className="lms-input min-w-0 flex-1 py-2 disabled:opacity-40">{Array.from({length:12},(_,i)=>String(i+1).padStart(2,"0")).map(v=><option key={v} value={v}>{v}</option>)}</select><span className="shrink-0 text-white/50">:</span><select aria-label={label+" minute"} value={minute} disabled={!date} onChange={e=>{setMinute(e.target.value);emit(date,hour,e.target.value,period)}} className="lms-input min-w-0 flex-1 py-2 disabled:opacity-40">{Array.from({length:60},(_,i)=>String(i).padStart(2,"0")).map(v=><option key={v} value={v}>{v}</option>)}</select><select aria-label={label+" AM or PM"} value={period} disabled={!date} onChange={e=>{setPeriod(e.target.value);emit(date,hour,minute,e.target.value)}} className="lms-input w-[4.5rem] shrink-0 py-2 disabled:opacity-40"><option>AM</option><option>PM</option></select></div>
-   <p className="mt-2 text-xs text-white/45">{date?dateLabel+" · "+hour+":"+minute+" "+period:"Choose a date before setting a time."}</p>
+ const dateLabel=date?new Date(date+"T12:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):"Choose a date"
+ return <div className="min-w-0">
+  <label className="mb-2 block text-sm text-white/60">{label}</label>
+  <div className="lms-datetime-card min-w-0 rounded-2xl border border-white/10 bg-white/[0.035] p-3 sm:p-4">
+   <div className="lms-date-native-row">
+    <CalendarDays size={18} aria-hidden="true" className="shrink-0 text-violet-300"/>
+    <input aria-label={label+" date"} type="date" value={date} onChange={e=>updateDate(e.target.value)} className="lms-input lms-native-date"/>
+   </div>
+   <div className="lms-time-native-row mt-3">
+    <Clock size={18} aria-hidden="true" className="shrink-0 text-violet-300"/>
+    <input aria-label={label+" time"} type="time" value={time} disabled={!date} onChange={e=>updateTime(e.target.value)} className="lms-input lms-native-time disabled:cursor-not-allowed disabled:opacity-40"/>
+   </div>
+   <p className="mt-2 text-xs text-white/45">{date?dateLabel+" · "+time:"Choose a date, then set the time."}</p>
   </div>
  </div>
 }
