@@ -995,7 +995,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 row.review_status = "needs_review"
                 row.rubric_evaluation = json.dumps({
                     "summary": "A concise answer matched key concepts without a detected contradiction.",
-                    "feedback": "Suggested marks are based on concept overlap against the reference answer and its individual sentences (" + str(round(lexical_reference * 100)) + "%). This model-light estimate may miss paraphrases; teacher review is required.",
+                    "feedback": "Suggested marks combine concept overlap and DSA sequence alignment against the reference answer and its individual sentences (" + str(round(lexical_reference * 100)) + "%). This model-light estimate still requires teacher review.",
                     "matched_concepts": matched_terms,
                     "missing_concepts": missing_terms,
                     "criteria": criteria_results,

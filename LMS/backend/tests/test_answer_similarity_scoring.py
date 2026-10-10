@@ -270,7 +270,7 @@ def test_short_answer_alignment_respects_detected_contradiction():
     from exam_evaluation import calculate_short_answer_overlap
 
     reference = "A deadlock causes processes to wait indefinitely and prevents execution."
-    answer = "A deadlock ends quickly and lets all processes continue normally."
+    answer = "A deadlock allows processes to continue normally and allows execution."
     assert calculate_short_answer_overlap(answer, reference) > 0
     detected, _, _ = es.detect_contradictions_and_correctness(answer, reference, [])
     assert detected
