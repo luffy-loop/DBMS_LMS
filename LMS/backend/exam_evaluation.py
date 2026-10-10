@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,18 @@ from audit_log import record_audit
 import evaluation_service as es
 
 router = APIRouter(prefix="", tags=["exam_evaluation"])
+logger = logging.getLogger(__name__)
+
+
+def _optional_embedding(text_content: str):
+    try:
+        return es.generate_embedding(text_content)
+    except Exception as exc:
+        logger.warning(
+            "Assessment embedding unavailable; grading will require review (%s: %s)",
+            type(exc).__name__, str(exc)[:240],
+        )
+        return None
 
 
 def normalize_datetime(dt: datetime | None) -> datetime | None:
@@ -158,7 +171,7 @@ def create_question(assignment_id: int, data: QuestionCreate, user=Depends(get_u
                     raise HTTPException(status_code=400, detail="Rubric criterion text cannot be empty")
 
         # Generate 384-dimensional vector embedding for reference answer
-        ref_vec = es.generate_embedding(ref_ans)
+        ref_vec = _optional_embedding(ref_ans)
         question.reference_answer = ref_ans
         question.reference_embedding = ref_vec
 
@@ -167,7 +180,7 @@ def create_question(assignment_id: int, data: QuestionCreate, user=Depends(get_u
 
         if data.rubric_criteria:
             for idx, c in enumerate(data.rubric_criteria):
-                crit_vec = es.generate_embedding(c.criterion_text.strip())
+                crit_vec = _optional_embedding(c.criterion_text.strip())
                 rubric_row = AssessmentQuestionRubric(
                     question_id=question.id,
                     criterion_text=c.criterion_text.strip(),

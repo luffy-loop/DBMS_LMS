@@ -1,12 +1,17 @@
 import math
 import re
 import hashlib
+import logging
+import threading
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 # Dimension 384 to match all-MiniLM-L6-v2
 VECTOR_DIMENSION = 384
+logger = logging.getLogger(__name__)
+_embedding_lock = threading.Lock()
+_nli_lock = threading.Lock()
 
 
 def _normalize_vector(vec: list[float]) -> list[float]:
@@ -20,7 +25,7 @@ def _normalize_vector(vec: list[float]) -> list[float]:
 _embedding_fn = None
 
 
-def get_embedding_model():
+def _load_embedding_model():
     """
     Returns the real all-MiniLM-L6-v2 semantic embedding model.
     Tries SentenceTransformers first, then ChromaDB's ONNX all-MiniLM-L6-v2 transformer.
@@ -49,6 +54,16 @@ def get_embedding_model():
         raise RuntimeError(f"Semantic embedding model 'all-MiniLM-L6-v2' is unavailable: {e}")
 
 
+def get_embedding_model():
+    global _embedding_fn
+    if _embedding_fn is not None:
+        return _embedding_fn
+    with _embedding_lock:
+        if _embedding_fn is None:
+            return _load_embedding_model()
+        return _embedding_fn
+
+
 def generate_embedding(text_content: str) -> list[float]:
     """
     Generates a 384-dimensional dense semantic embedding using the real
@@ -64,19 +79,25 @@ def generate_embedding(text_content: str) -> list[float]:
     model_type, model = get_embedding_model()
     if model_type == "sentence_transformers":
         raw = model.encode(clean_text).tolist()
-        return _normalize_vector(raw[:VECTOR_DIMENSION])
     elif model_type == "chroma_onnx":
         vecs = model([clean_text])
         raw = [float(x) for x in vecs[0]]
-        return _normalize_vector(raw[:VECTOR_DIMENSION])
     else:
         raise RuntimeError("Unknown embedding model backend")
+    if len(raw) != VECTOR_DIMENSION:
+        raise ValueError(f"Invalid embedding dimension: expected {VECTOR_DIMENSION}, got {len(raw)}")
+    if any(not math.isfinite(float(x)) for x in raw):
+        raise ValueError("Embedding contains non-finite values")
+    normalized = _normalize_vector([float(x) for x in raw])
+    if not any(x != 0.0 for x in normalized):
+        raise ValueError("Embedding model returned a zero vector")
+    return normalized
 
 
 _nli_model_tuple = None
 
 
-def get_nli_model():
+def _load_nli_model():
     """
     Returns the cached NLI Cross-Encoder model.
     Uses 'cross-encoder/nli-distilroberta-base' loaded via local ONNX Runtime & tokenizers.
@@ -119,6 +140,16 @@ def get_nli_model():
         raise RuntimeError(f"NLI model 'cross-encoder/nli-distilroberta-base' is unavailable: {e}")
 
 
+def get_nli_model():
+    global _nli_model_tuple
+    if _nli_model_tuple is not None:
+        return _nli_model_tuple
+    with _nli_lock:
+        if _nli_model_tuple is None:
+            return _load_nli_model()
+        return _nli_model_tuple
+
+
 def classify_nli(premise: str, hypothesis: str) -> dict[str, float]:
     """
     Evaluates premise-hypothesis NLI relationship.
@@ -131,8 +162,8 @@ def classify_nli(premise: str, hypothesis: str) -> dict[str, float]:
         "neutral": float         # 0.0 - 1.0
       }
     """
-    clean_p = (premise or "").strip()
-    clean_h = (hypothesis or "").strip()
+    clean_p = (premise or "").strip()[:8000]
+    clean_h = (hypothesis or "").strip()[:8000]
     if not clean_p or not clean_h:
         return {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
 
@@ -521,12 +552,15 @@ def evaluate_hybrid_descriptive(
             "overall_correctness": 0.0,
             "contradiction_detected": False,
             "contradiction_details": [],
-            "evaluator_confidence": 0.99,
-            "review_status": "auto_finalized",
+            "evaluator_confidence": 0.0,
+            "confidence_basis": "insufficient_evidence",
+            "review_status": "review_required",
+            "evaluation_state": "invalid_maximum",
+            "degraded_capabilities": [],
             "criteria": []
         }
 
-    clean_ans = (student_answer or "").strip()
+    clean_ans = (student_answer or "").strip()[:12000]
     words = clean_ans.split()
     if not clean_ans or len(words) < 2:
         return 0.0, 0.0, {
@@ -537,24 +571,34 @@ def evaluate_hybrid_descriptive(
             "overall_correctness": 0.0,
             "contradiction_detected": False,
             "contradiction_details": [],
-            "evaluator_confidence": 0.99,
-            "review_status": "auto_finalized",
+            "evaluator_confidence": 0.0,
+            "confidence_basis": "insufficient_evidence",
+            "review_status": "review_required",
+            "evaluation_state": "empty_or_too_short_answer",
+            "degraded_capabilities": [],
             "criteria": []
         }
 
     # Embedding models are optional at grading time: a model download/cache failure
     # must not turn a valid submission into an HTTP 500 or an unreviewed grade.
     embedding_fallback_used = False
+    nli_fallback_used = False
+    embedding_failure_reason = None
 
     def safe_generate_embedding(text_content: str) -> list[float]:
-        nonlocal embedding_fallback_used
+        nonlocal embedding_fallback_used, embedding_failure_reason
         try:
             vector = generate_embedding(text_content)
-            if len(vector) != VECTOR_DIMENSION:
-                raise ValueError("Unexpected embedding dimension")
-            return vector
-        except Exception:
+            if len(vector) != VECTOR_DIMENSION or any(not math.isfinite(float(x)) for x in vector):
+                raise ValueError("Invalid embedding shape or values")
+            if not any(float(x) != 0.0 for x in vector):
+                raise ValueError("Embedding is a zero vector")
+            return [float(x) for x in vector]
+        except Exception as exc:
             embedding_fallback_used = True
+            if embedding_failure_reason is None:
+                embedding_failure_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            logger.warning("AI grading embedding unavailable (%s)", embedding_failure_reason)
             return [0.0] * VECTOR_DIMENSION
 
     # Generate 384-dimensional vector embedding for student answer
@@ -636,10 +680,15 @@ def evaluate_hybrid_descriptive(
             if is_relevant_candidate and not embedding_fallback_used:
                 try:
                     nli_result = classify_nli(premise=crit_text, hypothesis=best_candidate_sentence)
+                    if nli_result.get("fallback_error"):
+                        nli_fallback_used = True
+                        logger.warning("AI grading NLI unavailable: %s", str(nli_result["fallback_error"])[:240])
                     nli_contra = nli_result.get("contradiction", 0.0)
                     nli_entail = nli_result.get("entailment", 0.0)
                     nli_neut = nli_result.get("neutral", 1.0)
-                except Exception:
+                except Exception as exc:
+                    nli_fallback_used = True
+                    logger.warning("AI grading NLI inference failed: %s: %s", type(exc).__name__, str(exc)[:240])
                     nli_contra = 0.0
                     nli_entail = 0.0
                     nli_neut = 1.0
@@ -789,6 +838,9 @@ def evaluate_hybrid_descriptive(
         base_marks = round(evidence_score * float(question_max_marks), 1)
 
         nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer and not embedding_fallback_used else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
+        if nli_res.get("fallback_error"):
+            nli_fallback_used = True
+            logger.warning("AI grading NLI unavailable: %s", str(nli_res["fallback_error"])[:240])
         legacy_contra = nli_res.get("contradiction", 0.0)
         legacy_entail = nli_res.get("entailment", 0.0)
 
@@ -814,18 +866,23 @@ def evaluate_hybrid_descriptive(
             evaluator_confidence = 0.68
 
     evaluator_confidence = max(0.0, min(1.0, float(evaluator_confidence)))
-    if embedding_fallback_used:
-        # Lexical evidence can still provide a provisional score, but it must be
-        # explicitly reviewed because semantic/NLI signals were unavailable.
+    if embedding_fallback_used or nli_fallback_used:
+        # Heuristic evidence strength is not a statistically calibrated probability.
         evaluator_confidence = min(evaluator_confidence, 0.49)
-    # Model confidence is not teacher approval and must never finalize a grade.
-    if evaluator_confidence >= 0.75 and not embedding_fallback_used:
-        review_status = "review_recommended"
-    else:
-        review_status = "review_required"
+    # Model confidence is never teacher approval. Every AI suggestion remains reviewable.
+    review_status = "review_required" if embedding_fallback_used or nli_fallback_used or evaluator_confidence < 0.75 else "review_recommended"
+    degraded_capabilities = []
+    if embedding_fallback_used:
+        degraded_capabilities.append("semantic_embeddings")
+    if nli_fallback_used:
+        degraded_capabilities.append("natural_language_inference")
 
     eval_dict = {
-        "evaluator_version": "hybrid-v2-nli",
+        "evaluator_version": "hybrid-v3-review-safe",
+        "confidence_basis": "heuristic_evidence_strength_not_calibrated_probability",
+        "evaluation_state": "degraded" if degraded_capabilities else "evaluated",
+        "degraded_capabilities": degraded_capabilities,
+        "embedding_failure_reason": embedding_failure_reason,
         "embedding_model": "all-MiniLM-L6-v2",
         "nli_model": "cross-encoder/nli-distilroberta-base",
         "overall_semantic_similarity": round(overall_sim, 4),
@@ -835,7 +892,8 @@ def evaluate_hybrid_descriptive(
         "evaluator_confidence": round(evaluator_confidence, 2),
         "review_status": review_status,
         "embedding_fallback_used": embedding_fallback_used,
-        "scoring_fallback": "lexical_review_required" if embedding_fallback_used else None,
+        "nli_fallback_used": nli_fallback_used,
+        "scoring_fallback": "lexical_review_required" if embedding_fallback_used else ("nli_unavailable_review_required" if nli_fallback_used else None),
         "criteria": criteria_eval_list
     }
 

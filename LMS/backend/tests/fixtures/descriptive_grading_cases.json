@@ -1,0 +1,90 @@
+{
+  "title": "Small manually reviewed descriptive grading regression fixture",
+  "purpose": "Qualitative regression cases only; these four cases do not establish statistical grading accuracy.",
+  "cases": [
+    {
+      "id": "primary-key-paraphrase",
+      "question": "What does a primary key do?",
+      "reference_answer": "A primary key uniquely identifies each row in a database table.",
+      "rubric": [
+        {
+          "criterion": "uniquely identifies each row",
+          "marks": 7
+        },
+        {
+          "criterion": "in a database table",
+          "marks": 3
+        }
+      ],
+      "student_answer": "A unique key identifies every row in the table.",
+      "expected_marks_range": [
+        7,
+        10
+      ],
+      "review_note": "Concise paraphrase preserves the central concept; teacher should confirm contextual adequacy."
+    },
+    {
+      "id": "primary-key-partial",
+      "question": "What does a primary key do?",
+      "reference_answer": "A primary key uniquely identifies each row in a database table.",
+      "rubric": [
+        {
+          "criterion": "uniquely identifies each row",
+          "marks": 7
+        },
+        {
+          "criterion": "in a database table",
+          "marks": 3
+        }
+      ],
+      "student_answer": "It identifies a row.",
+      "expected_marks_range": [
+        2,
+        6
+      ],
+      "review_note": "Some relevant idea, but uniqueness and database-table context are missing."
+    },
+    {
+      "id": "primary-key-irrelevant",
+      "question": "What does a primary key do?",
+      "reference_answer": "A primary key uniquely identifies each row in a database table.",
+      "rubric": [
+        {
+          "criterion": "uniquely identifies each row",
+          "marks": 7
+        },
+        {
+          "criterion": "in a database table",
+          "marks": 3
+        }
+      ],
+      "student_answer": "Photosynthesis converts sunlight into chemical energy.",
+      "expected_marks_range": [
+        0,
+        1
+      ],
+      "review_note": "Irrelevant to the question."
+    },
+    {
+      "id": "primary-key-contradiction",
+      "question": "What does a primary key do?",
+      "reference_answer": "A primary key uniquely identifies each row in a database table.",
+      "rubric": [
+        {
+          "criterion": "uniquely identifies each row",
+          "marks": 7
+        },
+        {
+          "criterion": "in a database table",
+          "marks": 3
+        }
+      ],
+      "student_answer": "A primary key does not uniquely identify a row.",
+      "expected_marks_range": [
+        0,
+        3
+      ],
+      "review_note": "Contains an explicit contradiction; the evaluator must flag for teacher review."
+    }
+  ]
+}

@@ -178,3 +178,13 @@ def test_student_submission_saves_answers_without_running_heavy_ai_in_request():
     assert "StudentQuestionAnswer(" in endpoint
     assert "background_tasks.add_task(" in endpoint
     assert "allow_origin_regex" in source
+
+
+def test_missing_embedding_model_does_not_block_question_setup(monkeypatch):
+    import exam_evaluation as ee
+    monkeypatch.setattr(
+        ee.es,
+        "generate_embedding",
+        lambda text: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+    )
+    assert ee._optional_embedding("A valid reference answer") is None
