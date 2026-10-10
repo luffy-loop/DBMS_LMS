@@ -3,6 +3,7 @@ import time
 from functools import lru_cache
 
 import chromadb
+from bson import ObjectId
 
 from mongodb import mongo_db
 
@@ -10,16 +11,77 @@ client = chromadb.PersistentClient(path="./vector_data")
 collection = client.get_or_create_collection("lms_resources")
 CACHE_TTL = 45
 _cache = {}
+_vectors_reconciled = False
+VECTOR_PAGE_SIZE = 100
 
 
 @lru_cache(maxsize=32)
-def embed_text(text):
+def _embed_text(text):
     from evaluation_service import generate_embedding
-    return generate_embedding((text or "")[:2000])
+    return generate_embedding(text)
+
+
+def embed_text(text):
+    # Truncate before caching so long extracted documents are not retained as cache keys.
+    return _embed_text((text or "")[:2000])
 
 
 def clear_search_cache():
     _cache.clear()
+
+
+def prune_orphaned_resource_vectors():
+    """Remove indexed material vectors whose source documents no longer exist."""
+    global _vectors_reconciled
+    if _vectors_reconciled:
+        return
+
+    vector_ids = []
+    offset = 0
+    try:
+        while True:
+            page = collection.get(
+                where={"type": "resource"},
+                include=["metadatas"],
+                limit=VECTOR_PAGE_SIZE,
+                offset=offset,
+            )
+            ids = page.get("ids") or []
+            vector_ids.extend(ids)
+            if len(ids) < VECTOR_PAGE_SIZE:
+                break
+            offset += len(ids)
+
+        valid_object_ids = []
+        for vector_id in vector_ids:
+            raw_id = vector_id.removeprefix("resource-")
+            try:
+                valid_object_ids.append((vector_id, ObjectId(raw_id)))
+            except Exception:
+                continue
+
+        existing = set()
+        for start in range(0, len(valid_object_ids), VECTOR_PAGE_SIZE):
+            batch = valid_object_ids[start:start + VECTOR_PAGE_SIZE]
+            documents = mongo_db.resources.find(
+                {"_id": {"$in": [object_id for _, object_id in batch]}},
+                {"_id": 1},
+            )
+            existing.update("resource-" + str(document["_id"]) for document in documents)
+
+        stale_ids = [
+            vector_id for vector_id in vector_ids
+            if not vector_id.startswith("resource-") or vector_id not in existing
+        ]
+        for start in range(0, len(stale_ids), VECTOR_PAGE_SIZE):
+            collection.delete(ids=stale_ids[start:start + VECTOR_PAGE_SIZE])
+
+        _vectors_reconciled = True
+        if stale_ids:
+            clear_search_cache()
+    except Exception:
+        # Never delete vectors if MongoDB cannot be checked reliably; retry on a later search.
+        return
 
 
 def index_resource(item):
@@ -113,6 +175,7 @@ def search_resources_detailed(query, course_ids=None):
     if not normalized:
         return [], metrics
 
+    prune_orphaned_resource_vectors()
     try:
         t = time.perf_counter()
         embedding = embed_text(normalized)
