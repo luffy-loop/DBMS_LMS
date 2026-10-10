@@ -85,10 +85,13 @@ def test_pdf_mapping_is_single_question_only_and_unreadable_files_need_review():
     assert all(item.get("manual_review_required") for item in mapped.values())
 
 
-def test_ai_suggested_aggregate_is_not_saved_as_final_marks():
-    source = open("exam_evaluation.py", encoding="utf-8").read()
-    assert "submission.marks = None" in source
-    assert "submission.marks = None if failed_evaluation else rounded_marks" not in source
+def test_ai_re_evaluation_preserves_teacher_final_marks_and_publication_state():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("exam_evaluation.py").read_text(encoding="utf-8")
+    endpoint = source.split('@router.post("/submissions/{submission_id}/correct-with-ai")', 1)[1].split('@router.get("/submissions/{submission_id}/evaluation")', 1)[0]
+    assert "submission.marks = None" not in endpoint
+    assert "submission.marks_published = False" not in endpoint
+    assert "Preserve any teacher-finalized marks and publication state" in endpoint
 
 
 
