@@ -1,8 +1,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0004_assignment_max_marks"
-down_revision = "0003_audit_logs"
+revision = "0006_assignment_max_marks"
+down_revision = "0005_reviewable_marks"
 branch_labels = None
 depends_on = None
 
