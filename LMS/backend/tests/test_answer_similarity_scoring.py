@@ -194,3 +194,37 @@ def test_manual_fixture_catches_relevant_irrelevant_and_contradictory_answers():
     assert detected
     assert details
     assert correctness < 1.0
+
+
+def test_deadlock_paraphrase_receives_high_lexical_credit_without_embeddings():
+    reference = (
+        "A deadlock is a condition in which two or more processes wait indefinitely "
+        "for resources held by one another, preventing further execution."
+    )
+    answer = (
+        "A deadlock is a situation where two or more processes wait for each other "
+        "forever, so none of them can continue."
+    )
+    score = calculate_lexical_answer_score(answer, reference)
+    assert score >= 0.80
+
+
+def test_deadlock_paraphrase_can_score_well_when_embedding_model_is_unavailable(monkeypatch):
+    reference = (
+        "A deadlock is a condition in which two or more processes wait indefinitely "
+        "for resources held by one another, preventing further execution."
+    )
+    answer = (
+        "A deadlock is a situation where two or more processes wait for each other "
+        "forever, so none of them can continue."
+    )
+    monkeypatch.setattr(
+        es, "generate_embedding",
+        lambda text: (_ for _ in ()).throw(RuntimeError("model unavailable")),
+    )
+    marks, similarity, result = es.evaluate_hybrid_descriptive(
+        None, answer, 10, reference, None, []
+    )
+    assert marks >= 8.0
+    assert result["embedding_fallback_used"] is True
+    assert result["review_status"] == "review_required"

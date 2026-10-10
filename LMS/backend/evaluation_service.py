@@ -386,8 +386,24 @@ def calculate_lexical_answer_score(student_answer: str, reference_answer: str) -
             result.append(token)
         return result
 
-    student_tokens = tokens(student_answer)
-    reference_tokens = tokens(reference_answer)
+    def canonicalize_phrases(value: str) -> str:
+        # Normalize common equivalent ways of describing the same OS/DB concepts.
+        # Keep this list explicit and conservative; it supplements, not replaces, model evidence.
+        phrase_groups = [
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+each other\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+one another\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\b(?:none of them can continue|none can continue|cannot continue|can't continue|unable to continue|cannot proceed|can't proceed)\b", "preventing further execution"),
+            (r"\b(?:preventing|prevents|prevent)\s+(?:any\s+)?further execution\b", "preventing further execution"),
+            (r"\b(?:wait forever|wait endlessly)\b", "wait indefinitely"),
+            (r"\b(?:each other|one another)\b", "one another"),
+        ]
+        normalized = (value or "").lower()
+        for pattern, replacement in phrase_groups:
+            normalized = re.sub(pattern, replacement, normalized)
+        return normalized
+
+    student_tokens = tokens(canonicalize_phrases(student_answer))
+    reference_tokens = tokens(canonicalize_phrases(reference_answer))
     if not student_tokens or not reference_tokens:
         return 0.0
 
