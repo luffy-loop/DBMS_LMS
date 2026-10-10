@@ -59,3 +59,27 @@ def test_rubric_evaluator_grants_partial_credit_for_close_paraphrase(monkeypatch
     assert 0 < marks <= 10
     assert result["criteria"][0]["awarded_marks"] >= 7
     assert result["criteria"][0]["covered"] is True
+
+
+
+def test_concise_correct_answer_matches_sentence_in_detailed_reference():
+    reference = (
+        "The main purpose of the system clock in an STM32 microcontroller is to provide "
+        "a timing signal that synchronizes and controls the operation of the CPU and peripheral devices. "
+        "It determines how fast the microcontroller executes instructions and operates its peripherals, "
+        "such as timers, UART, SPI, and I2C."
+    )
+    answer = (
+        "The system clock controls the speed of the CPU and synchronizes all operations "
+        "in the STM32 microcontroller."
+    )
+    reference_parts = [
+        part.strip()
+        for part in __import__("re").split(r"(?<=[.!?])\\s+", reference)
+        if len(part.split()) >= 3
+    ]
+    score = max(
+        calculate_lexical_answer_score(answer, candidate)
+        for candidate in [reference, *reference_parts]
+    )
+    assert score >= 0.35
