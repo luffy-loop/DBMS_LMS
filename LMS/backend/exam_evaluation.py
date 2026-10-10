@@ -914,7 +914,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             # force valid concise answers into a model-only path that may be
             # unavailable on a cold/free deployment.
             reference_parts = [
-                part.strip() for part in re.split(r"(?<=[.!?])\\s+", reference_answer)
+                part.strip() for part in re.split(r"(?<=[.!?])\s+", reference_answer)
                 if len(part.split()) >= 3
             ]
             lexical_scores = [
@@ -956,7 +956,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 row.similarity_score = None
                 row.student_embedding = None
                 row.evaluation_status = "evaluated"
-                row.evaluator_version = "lexical-short-answer-v1"
+                row.evaluator_version = "lexical-reference-sentence-v2"
                 row.evaluator_confidence = min(0.68, max(0.50, lexical_reference))
                 row.evaluated_at = get_now()
                 row.review_status = "needs_review"
