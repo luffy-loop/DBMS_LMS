@@ -228,3 +228,30 @@ def test_deadlock_paraphrase_can_score_well_when_embedding_model_is_unavailable(
     assert marks >= 8.0
     assert result["embedding_fallback_used"] is True
     assert result["review_status"] == "review_required"
+
+
+def test_dsa_sequence_alignment_recognizes_deadlock_paraphrase():
+    reference = (
+        "A deadlock is a condition in which two or more processes wait indefinitely "
+        "for resources held by one another, preventing further execution."
+    )
+    answer = (
+        "A deadlock is a situation where two or more processes wait for each other "
+        "forever, so none of them can continue."
+    )
+    assert es.calculate_sequence_alignment_score(answer, reference) >= 0.80
+
+
+def test_dsa_sequence_alignment_rejects_unrelated_answer():
+    reference = "A deadlock occurs when processes wait indefinitely for resources."
+    answer = "Photosynthesis converts sunlight into chemical energy."
+    assert es.calculate_sequence_alignment_score(answer, reference) < 0.20
+
+
+def test_dsa_sequence_alignment_is_bounded_and_handles_empty_input():
+    assert es.calculate_sequence_alignment_score("", "A reference answer") == 0.0
+    score = es.calculate_sequence_alignment_score(
+        "A unique key identifies each row",
+        "A primary key uniquely identifies each row in a database table",
+    )
+    assert 0.0 <= score <= 1.0

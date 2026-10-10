@@ -432,6 +432,56 @@ def calculate_lexical_answer_score(student_answer: str, reference_answer: str) -
     return round(max(0.0, min(1.0, 2 * precision * recall / (precision + recall))), 4)
 
 
+
+def calculate_sequence_alignment_score(student_answer: str, reference_answer: str) -> float:
+    """Token-level global sequence alignment using dynamic programming.
+
+    This is an order-aware DSA signal, not a semantic model. Phrase normalization
+    and the existing synonym groups let equivalent wording align before scoring.
+    """
+    def normalize(value: str) -> list[str]:
+        text = (value or "").lower()
+        phrases = [
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+each other\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+one another\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\b(?:none of them can continue|none can continue|cannot continue|can't continue|unable to continue|cannot proceed|can't proceed)\b", "preventing further execution"),
+            (r"\b(?:preventing|prevents|prevent)\s+(?:any\s+)?further execution\b", "preventing further execution"),
+            (r"\b(?:wait forever|wait endlessly)\b", "wait indefinitely"),
+            (r"\b(?:each other|one another)\b", "one another"),
+        ]
+        for pattern, replacement in phrases:
+            text = re.sub(pattern, replacement, text)
+        words = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", text)
+        words = [w for w in words if w not in STOPWORDS and len(w) >= 2]
+        return words[:500]
+
+    student = normalize(student_answer)
+    reference = normalize(reference_answer)
+    if not student or not reference:
+        return 0.0
+
+    groups = [set([key, *values]) for key, values in SYNONYMS.items()]
+    def equivalent(a: str, b: str) -> bool:
+        if a == b:
+            return True
+        return any(a in group and b in group for group in groups)
+
+    rows, cols = len(reference) + 1, len(student) + 1
+    dp = [[0] * cols for _ in range(rows)]
+    for i in range(1, rows):
+        for j in range(1, cols):
+            if equivalent(reference[i - 1], student[j - 1]):
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+
+    aligned = dp[-1][-1]
+    precision = aligned / len(student)
+    recall = aligned / len(reference)
+    if precision + recall == 0:
+        return 0.0
+    return round(2 * precision * recall / (precision + recall), 4)
+
 def get_crit_matches(crit_words: list[str], clean_ans: str) -> list[str]:
     stu_tokens = set(re.findall(r"[a-z0-9\-]+", clean_ans.lower()))
     matches = []
@@ -781,10 +831,12 @@ def evaluate_hybrid_descriptive(
             # Lexical concept coverage supplements embeddings for close paraphrases.
             # Never use this fallback to override an explicit contradiction.
             lexical_ratio = calculate_lexical_answer_score(clean_ans, crit_text)
-            if not is_crit_contradicted and lexical_ratio >= 0.50:
-                score_ratio = max(score_ratio, lexical_ratio)
+            alignment_ratio = calculate_sequence_alignment_score(clean_ans, crit_text)
+            text_evidence_ratio = max(lexical_ratio, alignment_ratio)
+            if not is_crit_contradicted and text_evidence_ratio >= 0.50:
+                score_ratio = max(score_ratio, text_evidence_ratio)
                 covered = score_ratio >= 0.50
-                if lexical_ratio >= 0.75:
+                if text_evidence_ratio >= 0.75:
                     crit_confidence = max(crit_confidence, 0.80)
                 else:
                     crit_confidence = max(crit_confidence, 0.60)
@@ -796,6 +848,7 @@ def evaluate_hybrid_descriptive(
                 "criterion_text": crit_text,
                 "max_marks": crit_max,
                 "semantic_similarity": round(crit_sim, 4),
+                "sequence_alignment_score": alignment_ratio,
                 "similarity": round(crit_sim, 4),
                 "nli": {
                     "entailment": round(nli_entail, 4),
@@ -849,8 +902,9 @@ def evaluate_hybrid_descriptive(
         # Combine semantic similarity with meaningful-token coverage so concise,
         # correctly paraphrased answers can receive partial credit.
         lexical_score = calculate_lexical_answer_score(clean_ans, reference_answer or "")
+        alignment_score = calculate_sequence_alignment_score(clean_ans, reference_answer or "")
         semantic_score = calculate_descriptive_marks(overall_sim, 1.0, clean_ans)
-        evidence_score = max(float(lexical_score), float(semantic_score))
+        evidence_score = max(float(lexical_score), float(alignment_score), float(semantic_score))
         base_marks = round(evidence_score * float(question_max_marks), 1)
 
         nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer and not embedding_fallback_used else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
