@@ -137,3 +137,13 @@ def test_low_score_review_threshold_rejects_invalid_maximum_safely():
 
     assert is_low_score(0, 0) is False
     assert is_low_score(0, -1) is False
+
+def test_teacher_triggered_ai_correction_endpoint_is_authorized_and_keeps_marks_unpublished():
+    from pathlib import Path
+    source = Path(__file__).parents[1].joinpath("exam_evaluation.py").read_text(encoding="utf-8")
+    assert '@router.post("/submissions/{submission_id}/correct-with-ai")' in source
+    assert 'user["role"] not in {"teacher", "admin"}' in source
+    assert 'submission.marks = None' in source
+    assert 'submission.marks_published = False' in source
+    assert 'evaluation_failed' in source
+    assert 'No teacher reference answer is configured.' in source
