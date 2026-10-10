@@ -12,15 +12,10 @@ CACHE_TTL = 45
 _cache = {}
 
 
-@lru_cache(maxsize=1)
-def get_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
-
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=32)
 def embed_text(text):
-    return get_model().encode(text).tolist()
+    from evaluation_service import generate_embedding
+    return generate_embedding((text or "")[:2000])
 
 
 def clear_search_cache():
