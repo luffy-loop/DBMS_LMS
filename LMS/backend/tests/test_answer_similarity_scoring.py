@@ -336,3 +336,11 @@ def test_expanded_fixture_covers_paraphrase_partial_irrelevant_and_keyword_traps
         assert 0 <= low <= high <= sum(item["marks"] for item in case["rubric"])
         assert case["review_note"].strip()
 
+
+
+def test_unrelated_short_answer_is_classified_without_model_fallback():
+    from exam_evaluation import calculate_short_answer_overlap
+
+    question_reference = "STM32CubeIDE is software used to write, compile, debug, and run programs on STM32 microcontrollers."
+    wrong_answer = "PPID (Parent Process ID) is the ID of the process that created another process."
+    assert calculate_short_answer_overlap(wrong_answer, question_reference) < 0.15

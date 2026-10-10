@@ -1004,6 +1004,29 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 })
                 continue
 
+        # A very low lexical/alignment score with no contradiction is strong evidence
+        # that the answer is unrelated. Do not wait for heavyweight models just to fail
+        # on an obviously off-topic answer; record a reviewable zero instead.
+        if len(student_answer.split()) <= 30 and lexical_reference < 0.15 and not contradiction:
+            row.awarded_marks = 0.0
+            row.similarity_score = None
+            row.student_embedding = None
+            row.evaluation_status = "evaluated"
+            row.evaluator_version = "lexical-reference-sentence-v3-dsa"
+            row.evaluator_confidence = 0.55
+            row.evaluated_at = get_now()
+            row.review_status = "needs_review"
+            row.rubric_evaluation = json.dumps({
+                "summary": "The answer has no meaningful overlap with the reference answer.",
+                "feedback": "Suggested marks are 0 because the answer appears unrelated to the question. Teacher review is required before marks are finalized.",
+                "matched_concepts": [],
+                "missing_concepts": [],
+                "criteria": [],
+                "scoring_method": "lexical-reference-sentence-v3-dsa",
+                "review_reason": "Very low concept overlap; manual confirmation required.",
+            })
+            continue
+
         try:
             student_vector = es.generate_embedding(student_answer)
             if not question.reference_embedding:
