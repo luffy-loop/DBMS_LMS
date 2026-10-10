@@ -25,6 +25,25 @@ router = APIRouter(prefix="", tags=["exam_evaluation"])
 logger = logging.getLogger(__name__)
 
 
+CURRENT_DESCRIPTIVE_EVALUATOR_VERSIONS = {
+    "lexical-reference-sentence-v3-dsa",
+    "hybrid-v3-dsa-alignment",
+}
+
+
+def calculate_short_answer_overlap(student_answer: str, reference_answer: str) -> float:
+    """Combine lexical and DSA sequence-alignment evidence for concise answers."""
+    reference_parts = [
+        part.strip() for part in re.split(r"(?<=[.!?])\s+", (reference_answer or "").strip())
+        if len(part.split()) >= 3
+    ]
+    scores = []
+    for candidate in [(reference_answer or "").strip(), *reference_parts]:
+        scores.append(es.calculate_lexical_answer_score(student_answer, candidate))
+        scores.append(es.calculate_sequence_alignment_score(student_answer, candidate))
+    return max(scores, default=0.0)
+
+
 def _optional_embedding(text_content: str):
     try:
         return es.generate_embedding(text_content)
@@ -842,10 +861,16 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
     for rubric in rubric_rows:
         rubrics_by_qid.setdefault(rubric.question_id, []).append(rubric)
 
-    # Reuse the persisted result on repeated successful requests. Failed rows remain retryable.
-    if all(row.evaluation_status not in {"evaluation_failed", "pending"} for row in records) and any(
-        row.evaluator_version and row.review_status in {"ai_evaluated", "needs_review"} for row in records
-    ):
+    # Reuse only results produced by the current grading logic. Older lexical-only
+    # suggestions must be recalculated so the DSA alignment signal actually takes effect.
+    current_versions = all(
+        (row.question_type == "mcq" and row.evaluator_version == "deterministic-mcq")
+        or row.evaluator_version in CURRENT_DESCRIPTIVE_EVALUATOR_VERSIONS
+        for row in records
+    )
+    if current_versions and all(
+        row.evaluation_status not in {"evaluation_failed", "pending"} for row in records
+    ) and any(row.evaluator_version and row.review_status in {"ai_evaluated", "needs_review"} for row in records):
         total_max = sum(float(row.max_marks) for row in records)
         suggested = sum(float(row.awarded_marks) for row in records)
         return {
@@ -926,15 +951,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             # its individual sentences, so extra explanatory detail does not
             # force valid concise answers into a model-only path that may be
             # unavailable on a cold/free deployment.
-            reference_parts = [
-                part.strip() for part in re.split(r"(?<=[.!?])\s+", reference_answer)
-                if len(part.split()) >= 3
-            ]
-            lexical_scores = [
-                es.calculate_lexical_answer_score(student_answer, candidate)
-                for candidate in [reference_answer, *reference_parts]
-            ]
-            lexical_reference = max(lexical_scores, default=0.0)
+            lexical_reference = calculate_short_answer_overlap(student_answer, reference_answer)
             contradiction, contradiction_details, _ = es.detect_contradictions_and_correctness(
                 student_answer, reference_answer,
                 [str(getattr(item, "criterion_text", "")) for item in criteria_rows]
@@ -946,7 +963,10 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                     for criterion in criteria_rows:
                         criterion_text = str(getattr(criterion, "criterion_text", "") or "")
                         criterion_max = float(getattr(criterion, "max_marks", 1.0) or 1.0)
-                        ratio = es.calculate_lexical_answer_score(student_answer, criterion_text)
+                        ratio = max(
+                            es.calculate_lexical_answer_score(student_answer, criterion_text),
+                            es.calculate_sequence_alignment_score(student_answer, criterion_text),
+                        )
                         awarded_criterion = round(max(0.0, min(criterion_max, ratio * criterion_max)), 2)
                         awarded_total += awarded_criterion
                         criteria_results.append({
@@ -969,7 +989,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 row.similarity_score = None
                 row.student_embedding = None
                 row.evaluation_status = "evaluated"
-                row.evaluator_version = "lexical-reference-sentence-v2"
+                row.evaluator_version = "lexical-reference-sentence-v3-dsa"
                 row.evaluator_confidence = min(0.68, max(0.50, lexical_reference))
                 row.evaluated_at = get_now()
                 row.review_status = "needs_review"
@@ -979,7 +999,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                     "matched_concepts": matched_terms,
                     "missing_concepts": missing_terms,
                     "criteria": criteria_results,
-                    "scoring_method": "lexical-reference-sentence-v2",
+                    "scoring_method": "lexical-reference-sentence-v3-dsa",
                     "review_reason": "Concise-answer concept-overlap estimate; teacher confirmation required.",
                 })
                 continue
@@ -1016,7 +1036,7 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             row.similarity_score = similarity
             row.student_embedding = student_vector
             row.evaluation_status = "evaluated"
-            row.evaluator_version = "hybrid-v2-nli"
+            row.evaluator_version = "hybrid-v3-dsa-alignment"
             row.evaluator_confidence = evaluation.get("evaluator_confidence")
             row.evaluated_at = get_now()
             # Every AI-generated score remains a suggestion until a teacher reviews it.

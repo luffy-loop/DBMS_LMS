@@ -241,6 +241,40 @@ def test_dsa_sequence_alignment_recognizes_deadlock_paraphrase():
     )
     assert es.calculate_sequence_alignment_score(answer, reference) >= 0.80
 
+def test_short_answer_grading_uses_dsa_alignment_for_deadlock_paraphrase():
+    from exam_evaluation import calculate_short_answer_overlap
+
+    reference = (
+        "A deadlock is a condition in which two or more processes wait indefinitely "
+        "for resources held by one another, preventing further execution."
+    )
+    answer = (
+        "A deadlock is a situation where two or more processes wait for each other "
+        "forever, so none of them can continue."
+    )
+    assert calculate_short_answer_overlap(answer, reference) >= 0.80
+
+
+def test_short_answer_alignment_does_not_reward_unrelated_content():
+    from exam_evaluation import calculate_short_answer_overlap
+
+    reference = (
+        "A deadlock is a condition in which two or more processes wait indefinitely "
+        "for resources held by one another, preventing further execution."
+    )
+    answer = "Photosynthesis converts sunlight into chemical energy."
+    assert calculate_short_answer_overlap(answer, reference) < 0.20
+
+
+def test_short_answer_alignment_respects_detected_contradiction():
+    from exam_evaluation import calculate_short_answer_overlap
+
+    reference = "A deadlock causes processes to wait indefinitely and prevents execution."
+    answer = "A deadlock ends quickly and lets all processes continue normally."
+    assert calculate_short_answer_overlap(answer, reference) > 0
+    detected, _, _ = es.detect_contradictions_and_correctness(answer, reference, [])
+    assert detected
+
 
 def test_dsa_sequence_alignment_rejects_unrelated_answer():
     reference = "A deadlock occurs when processes wait indefinitely for resources."
