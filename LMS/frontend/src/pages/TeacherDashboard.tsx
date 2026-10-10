@@ -214,7 +214,7 @@ export default function TeacherDashboard() {
               </select>
             </Field>
             <label className="block cursor-pointer rounded-2xl border border-dashed border-white/15 bg-white/[.025] p-7 text-center hover:border-violet-400/30">
-              <input type="file" multiple accept={ACCEPT} disabled={busy} className="sr-only" onChange={e=>addFiles(e.target.files)} />
+              <input type="file" multiple accept={ACCEPT} disabled={uploadBusy} className="sr-only" onChange={e=>addFiles(e.target.files)} />
               <Upload className="mx-auto text-violet-300" size={28}/>
               <p className="mt-3 text-sm font-medium">Choose multiple files</p>
               <p className="mt-1 text-xs text-white/35">PDF, DOCX, DOC, PPTX, PPT, TXT, MD, PNG, JPG, JPEG, WEBP, CSV, XLSX · max {MAX_FILES} files · {10} MB/file</p>
