@@ -405,3 +405,16 @@ AI Search uses bounded top-K retrieval, authorization-aware course filters, shor
 Teachers can review and edit generated questions before explicitly publishing them as course assignments. Publishing creates one course-level assignment and notifications for enrolled students.
 
 See docs/material-processing.md, docs/ai-workflows.md and docs/architecture-final.md for implementation boundaries and known limitations.
+
+## DSA Algorithm Integration
+
+The LMS grading engine applies ideas from the separate [DSA-A6 coursework repository](https://github.com/luffy-loop/DSA-A6) without merging or changing that repository. This keeps the coursework's commit history and learning progression intact while showing how algorithm concepts can support a practical application.
+
+- **Source study:** [NeedlemanWunsch.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/NeedlemanWunsch.java), [SmithWaterman.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/SmithWaterman.java), and [EditDistance.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/EditDistance.java).
+- **LMS implementation:** `LMS/backend/evaluation_service.py` includes a token-level dynamic-programming sequence-alignment score with phrase normalization and a small synonym mapping. It is a Python adaptation of the algorithmic approach, not a direct import or line-for-line port of the Java coursework.
+- **How it is used:** the alignment score supplements lexical coverage and semantic/NLI evidence when scoring a response. It helps recognize equivalent wording, but does not by itself establish factual correctness or guarantee a particular grade.
+- **Validation:** regression tests cover a deadlock paraphrase, unrelated text, bounded scores, and empty inputs. The backend CI and frontend build passed for the sequence-alignment integration commit; this does not replace testing against real instructor-authored rubrics and student answers.
+- **Limitations:** synonym rules and token alignment are heuristic signals, not a calibrated measure of correctness. Grading remains reviewable, and production suitability requires broader subject-specific test sets and educator validation.
+
+See [the integration notes](docs/dsa-algorithm-integration.md) for the algorithm mapping, design choices, and validation boundaries.
+
