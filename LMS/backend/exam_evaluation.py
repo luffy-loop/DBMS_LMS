@@ -783,10 +783,37 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
         StudentQuestionAnswer.submission_id == submission.id
     ).all()
     if not records:
-        raise HTTPException(
-            status_code=422,
-            detail="AI correction requires saved question-level answers. Add assessment questions and a reference answer or rubric, then ask the student to submit again. Manual grading remains available."
+        # Legacy free-text submissions can be mapped safely only when the assessment
+        # has exactly one descriptive question with a usable reference answer.
+        legacy_questions = db.query(AssessmentQuestion).filter(
+            AssessmentQuestion.assignment_id == assignment.id,
+            AssessmentQuestion.question_type == "descriptive",
+        ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
+        answer_text = (submission.answer or "").strip()
+        if len(legacy_questions) != 1 or len(answer_text.split()) < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="This submission cannot be graded automatically: a substantive answer and exactly one matching descriptive question are required. Add question-level answers or grade it manually."
+            )
+        legacy_question = legacy_questions[0]
+        if len((legacy_question.reference_answer or "").split()) < 2:
+            raise HTTPException(status_code=422, detail="Add a reference answer or rubric to this question before using AI grading. The original submission is preserved.")
+        legacy_record = StudentQuestionAnswer(
+            submission_id=submission.id,
+            question_id=legacy_question.id,
+            student_id=submission.student_id,
+            question_type="descriptive",
+            student_answer=answer_text,
+            reference_answer=legacy_question.reference_answer,
+            awarded_marks=0,
+            max_marks=int(legacy_question.max_marks or assignment.max_marks or 10),
+            evaluation_status="pending",
+            evaluated_at=get_now(),
+            review_status="needs_review",
         )
+        db.add(legacy_record)
+        db.flush()
+        records = [legacy_record]
 
     question_ids = [row.question_id for row in records]
     questions = {
