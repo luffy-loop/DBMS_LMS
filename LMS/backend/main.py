@@ -1891,9 +1891,9 @@ async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):
         raise HTTPException(status_code=503,detail={"error":"SEARCH_UNAVAILABLE","message":"Search service unavailable. Please retry."})
 
 
-# Wrap the completed application so CORS headers are present even on error responses.
-app = CORSMiddleware(
-    app=app,
+# Register CORS on the FastAPI instance so dependency overrides and test clients remain available.
+app.add_middleware(
+    CORSMiddleware,
     allow_origins=cors_origins,
     allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.vercel\.app$",
     allow_credentials=False,
