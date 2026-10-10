@@ -43,4 +43,20 @@ function AppRoutes(){return <Suspense fallback={<RouteLoading/>}><Routes>
 <Route path="/profile" element={<Protected><Profile/></Protected>}/>
 <Route path="*" element={<AccessDenied/>}/>
 </Routes></Suspense>}
+window.addEventListener("vite:preloadError", event => {
+  event.preventDefault()
+  const now = Date.now()
+  const key = "lms:chunk-reload-at"
+  try {
+    const last = Number(sessionStorage.getItem(key) || "0")
+    if (now - last < 30000) return
+    sessionStorage.setItem(key, String(now))
+    const url = new URL(window.location.href)
+    url.searchParams.set("_chunk_reload", String(now))
+    window.location.replace(url.toString())
+  } catch {
+    window.location.reload()
+  }
+})
+
 createRoot(document.getElementById("root")!).render(<StrictMode><BrowserRouter><AppRoutes/></BrowserRouter></StrictMode>)
