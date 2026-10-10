@@ -1209,7 +1209,14 @@ def review_submission(
 
     # A partial review must not finalize a submission total.
     total_max = sum(r.max_marks for r in records)
-    all_reviewed = bool(records) and all(r.review_status == "reviewed" for r in records)
+    required_question_count = db.query(AssessmentQuestion.id).filter(
+        AssessmentQuestion.assignment_id == assignment.id
+    ).count()
+    all_reviewed = (
+        bool(records)
+        and len(records) == required_question_count
+        and all(r.review_status == "reviewed" for r in records)
+    )
     total_awarded = sum(
         (r.teacher_override_marks if r.teacher_override_marks is not None else r.awarded_marks)
         for r in records
