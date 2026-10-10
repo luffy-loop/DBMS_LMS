@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { BookOpen, Plus, Upload, X, Loader2, FileText, Image, Presentation, Table2, File, GripVertical } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import AppLayout from "../components/AppLayout"
@@ -23,7 +23,9 @@ export default function TeacherDashboard() {
   const [statuses,setStatuses] = useState<Record<string,string>>({})
   const [resourceIds,setResourceIds] = useState<Record<string,string>>({})
   const [errors,setErrors] = useState<Record<string,string>>({})
-  const [busy,setBusy] = useState(false)
+  const [courseBusy,setCourseBusy] = useState(false)
+  const [uploadBusy,setUploadBusy] = useState(false)
+  const uploadController = useRef<AbortController|null>(null)
   const [message,setMessage] = useState("")
   const [error,setError] = useState("")
 
@@ -51,12 +53,12 @@ export default function TeacherDashboard() {
 
   async function createCourse(event:React.FormEvent) {
     event.preventDefault()
-    setBusy(true); setError(""); setMessage("")
+    setCourseBusy(true); setError(""); setMessage("")
     try {
-      await apiJson("/courses",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,description})})
+      await apiJson("/courses",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,description})},45000)
       setTitle(""); setDescription(""); setShowCourse(false); setMessage("Course created successfully."); await load()
     } catch(e) { setError(e instanceof Error ? e.message : "Failed to create course") }
-    finally { setBusy(false) }
+    finally { setCourseBusy(false) }
   }
 
   function addFiles(list:FileList|null) {
@@ -84,13 +86,15 @@ export default function TeacherDashboard() {
   async function uploadAll() {
     const pending = files.filter(file => statuses[file.name] !== "READY")
     if (!courseId || !pending.length) return
-    setBusy(true); setError(""); setMessage("")
+    const controller = new AbortController()
+    uploadController.current = controller
+    setUploadBusy(true); setError(""); setMessage("")
     let allReady = true
     try {
       for (const file of pending) {
         const existingId = resourceIds[file.name]
         if (statuses[file.name] === "TIMEOUT" && existingId) {
-          const status = await waitForReady(existingId, file.name)
+          const status = await waitForReady(existingId, file.name, controller.signal)
           if (status !== "READY") allReady = false
           continue
         }
@@ -98,7 +102,7 @@ export default function TeacherDashboard() {
         setErrors(current => ({...current,[file.name]:""}))
         setProgress(current => ({...current,[file.name]:0}))
         try {
-          const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})))
+          const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})), controller.signal)
           const first = (result as {files?:Array<{id?:string;status:string;error?:string}>}).files?.[0]
           if (!first || first.status === "FAILED") throw new Error(first?.error || "Upload failed")
           if (first.id) setResourceIds(current => ({...current,[file.name]:first.id!}))
@@ -109,10 +113,15 @@ export default function TeacherDashboard() {
           }
           if (!first.id) throw new Error("Upload completed without a processing ID. Remove the file and try again.")
           setStatuses(current => ({...current,[file.name]:"PROCESSING"}))
-          const status = await waitForReady(first.id, file.name)
+          const status = await waitForReady(first.id, file.name, controller.signal)
           if (status !== "READY") allReady = false
         } catch(e) {
           allReady = false
+          if (controller.signal.aborted) {
+            setStatuses(current => ({...current,[file.name]:"CANCELLED"}))
+            setErrors(current => ({...current,[file.name]:"Stopped waiting/uploading. If the server already accepted this file, its processing may continue; refresh before retrying."}))
+            break
+          }
           const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Upload failed"
           setStatuses(current => ({...current,[file.name]:"FAILED"}))
           setErrors(current => ({...current,[file.name]:message}))
@@ -126,19 +135,21 @@ export default function TeacherDashboard() {
         setMessage("Upload batch finished with items that need attention. Successful files will not be uploaded again.")
       }
     } finally {
-      setBusy(false)
+      uploadController.current = null
+      setUploadBusy(false)
     }
   }
 
-  async function waitForReady(id:string, filename:string):Promise<string> {
+  async function waitForReady(id:string, filename:string, signal:AbortSignal):Promise<string> {
     if (!id) {
       setStatuses(current => ({...current,[filename]:"FAILED"}))
       setErrors(current => ({...current,[filename]:"The server did not return a resource ID for processing."}))
       return "FAILED"
     }
     for(let attempt=0; attempt<60; attempt++) {
+      if(signal.aborted) return "CANCELLED"
       try {
-        const data = await apiJson<{status:string;error_message?:string|null}>("/resources/" + id + "/status",{},10000)
+        const data = await apiJson<{status:string;error_message?:string|null}>("/resources/" + id + "/status",{signal},10000)
         setStatuses(current => ({...current,[filename]:data.status}))
         if (data.status === "READY") {
           setErrors(current => ({...current,[filename]:""}))
@@ -150,7 +161,10 @@ export default function TeacherDashboard() {
           return "FAILED"
         }
       } catch {}
-      await new Promise(resolve => window.setTimeout(resolve,2000))
+      await new Promise<void>(resolve => {
+        const timer = window.setTimeout(resolve,2000)
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve() }, {once:true})
+      })
     }
     setStatuses(current => ({...current,[filename]:"TIMEOUT"}))
     setErrors(current => ({...current,[filename]:"Processing is still running. Close this window safely and reopen it later to check status."}))
@@ -188,14 +202,14 @@ export default function TeacherDashboard() {
           <form onSubmit={createCourse} className="space-y-5">
             <Field label="Course title"><input value={title} onChange={e=>setTitle(e.target.value)} required className="lms-input" /></Field>
             <Field label="Description"><textarea value={description} onChange={e=>setDescription(e.target.value)} required rows={5} className="lms-input resize-y"/></Field>
-            <button disabled={busy} className="lms-btn-primary w-full rounded-xl py-3 text-sm disabled:opacity-50">{busy?"Creating...":"Create course"}</button>
+            <div className="flex gap-3"><button type="button" onClick={()=>setShowCourse(false)} className="lms-btn-secondary flex-1 rounded-xl py-3 text-sm">Cancel</button><button disabled={courseBusy} className="lms-btn-primary flex-1 rounded-xl py-3 text-sm disabled:opacity-50">{courseBusy?"Creating...":"Create course"}</button></div>
           </form>
         </Modal>}
 
-        {showUpload && <Modal title="Upload learning materials" onClose={()=>setShowUpload(false)}>
+        {showUpload && <Modal title="Upload learning materials" onClose={()=>{if(uploadBusy)uploadController.current?.abort();setShowUpload(false)}}>
           <div className="space-y-5">
             <Field label="Course">
-              <select value={courseId} disabled={busy} onChange={e=>setCourseId(e.target.value)} className="lms-input">
+              <select value={courseId} disabled={uploadBusy} onChange={e=>setCourseId(e.target.value)} className="lms-input">
                 {courses.map(course=><option key={course.id} value={course.id}>{course.title}</option>)}
               </select>
             </Field>
@@ -211,13 +225,13 @@ export default function TeacherDashboard() {
               <div className="h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400" style={{width:overall+"%"}}/></div>
               <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
                 {files.map(file => <div key={file.name} className="rounded-xl border border-white/10 bg-white/[.025] p-3">
-                  <div className="flex items-start gap-3"><GripVertical size={15} className="mt-1 text-white/20"/><FileIcon name={file.name}/><div className="min-w-0 flex-1"><p className="truncate text-sm">{file.name}</p><p className="mt-1 text-[11px] text-white/30">{formatBytes(file.size)} · {statuses[file.name] || "READY"}</p></div>{!busy && <button onClick={()=>removeFile(file.name)} className="text-white/30 hover:text-white" aria-label={"Remove "+file.name}><X size={15}/></button>}</div>
+                  <div className="flex items-start gap-3"><GripVertical size={15} className="mt-1 text-white/20"/><FileIcon name={file.name}/><div className="min-w-0 flex-1"><p className="truncate text-sm">{file.name}</p><p className="mt-1 text-[11px] text-white/30">{formatBytes(file.size)} · {statuses[file.name] || "READY"}</p></div>{!uploadBusy && <button onClick={()=>removeFile(file.name)} className="text-white/30 hover:text-white" aria-label={"Remove "+file.name}><X size={15}/></button>}</div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className={"h-full " + (statuses[file.name]==="FAILED" || statuses[file.name]==="TIMEOUT" ? "bg-red-400" : "bg-violet-400")} style={{width:(progress[file.name]||0)+"%"}}/></div>
                   {errors[file.name] && <p className="mt-2 text-xs text-red-300">{errors[file.name]}</p>}
                 </div>)}
               </div>
             </div>}
-            <button disabled={busy || !files.some(file => statuses[file.name] !== "READY") || !courseId} onClick={uploadAll} className="lms-btn-primary w-full rounded-xl py-3 text-sm disabled:opacity-40">{busy ? <><Loader2 size={16} className="animate-spin"/>Processing uploads...</> : files.some(file => statuses[file.name] !== "READY") ? <><Upload size={16}/>{files.some(file => statuses[file.name] === "FAILED") ? "Retry unfinished files" : "Upload remaining files"}</> : "All files ready"}</button>
+            <div className="flex gap-3">{uploadBusy ? <button type="button" onClick={()=>uploadController.current?.abort()} className="lms-btn-secondary flex-1 rounded-xl py-3 text-sm">Cancel batch</button> : <button type="button" onClick={()=>setShowUpload(false)} className="lms-btn-secondary flex-1 rounded-xl py-3 text-sm">Cancel</button>}<button disabled={uploadBusy || !files.some(file => statuses[file.name] !== "READY") || !courseId} onClick={uploadAll} className="lms-btn-primary flex-1 rounded-xl py-3 text-sm disabled:opacity-40">{uploadBusy ? <><Loader2 size={16} className="animate-spin"/>Processing uploads...</> : files.some(file => statuses[file.name] !== "READY") ? <><Upload size={16}/>{files.some(file => statuses[file.name] === "FAILED" || statuses[file.name] === "CANCELLED") ? "Retry unfinished files" : "Upload remaining files"}</> : "All files ready"}</button></div>
           </div>
         </Modal>}
       </div>
