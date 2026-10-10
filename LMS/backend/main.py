@@ -635,7 +635,7 @@ def format_iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     norm = normalize_datetime(dt)
-    return norm.isoformat()
+    return norm.isoformat() + "Z"
 
 format_iso_utc = format_iso
 
