@@ -7,6 +7,13 @@ export class ApiError extends Error {
 }
 
 function requestId(){if(typeof crypto!=="undefined"&&"randomUUID" in crypto)return crypto.randomUUID();return Math.random().toString(36).slice(2)}
+let invalidatedToken:string|null=null
+function invalidateSessionFor401(path:string,token:string|null){
+  if(path==="/login"||path==="/register"||!token||invalidatedToken===token)return
+  invalidatedToken=token
+  clearSession()
+  window.dispatchEvent(new Event("lms:logout"))
+}
 
 export function clearSession(){
   sessionStorage.removeItem("token")
@@ -42,7 +49,8 @@ export async function apiFetch(path:string,options:RequestInit={},timeoutMs=1500
   if(token&&!headers.has("Authorization"))headers.set("Authorization","Bearer "+token)
   try{
     const response=await fetch(API+path,{...options,headers,signal:controller.signal})
-    if(response.status===401){clearSession();window.dispatchEvent(new Event("lms:logout"))}
+    if(path==="/login"&&response.ok)invalidatedToken=null
+    if(response.status===401)invalidateSessionFor401(path,token)
     return response
   }catch(error){
     if(controller.signal.aborted)throw new ApiError(408,"The request timed out or was cancelled")
@@ -67,7 +75,7 @@ export function uploadFile(path:string,file:File,fields:Record<string,string>,on
   const token=sessionStorage.getItem("token");if(token)xhr.setRequestHeader("Authorization","Bearer "+token)
   xhr.setRequestHeader("X-Request-ID",requestId());xhr.responseType="json"
   xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100))}
-  xhr.onload=()=>{const payload=xhr.response??(()=>{try{return JSON.parse(xhr.responseText)}catch{return {}}})();if(xhr.status>=200&&xhr.status<300)resolve(payload);else{if(xhr.status===401){clearSession();window.dispatchEvent(new Event("lms:logout"))}reject(new ApiError(xhr.status,errorMessage(xhr.status,payload?.detail),payload))}}
+  xhr.onload=()=>{const payload=xhr.response??(()=>{try{return JSON.parse(xhr.responseText)}catch{return {}}})();if(xhr.status>=200&&xhr.status<300)resolve(payload);else{if(xhr.status===401)invalidateSessionFor401(path,token);reject(new ApiError(xhr.status,errorMessage(xhr.status,payload?.detail),payload))}}
   xhr.onerror=()=>reject(new ApiError(0,"Unable to reach the LMS backend while uploading"))
   xhr.ontimeout=()=>reject(new ApiError(408,"Upload timed out"));xhr.timeout=120000
   if(signal){if(signal.aborted)xhr.abort();signal.addEventListener("abort",()=>xhr.abort(),{once:true})}
