@@ -67,14 +67,22 @@ async def startup():
 slow_request_ms = float(os.getenv("SLOW_REQUEST_MS", "150"))
 max_upload_mb = max(1, int(os.getenv("MAX_UPLOAD_MB", "10")))
 max_upload_bytes = max_upload_mb * 1024 * 1024
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:5173,https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app,https://frontend-plum-mu-90.vercel.app,https://frontend-poojasrikandhula-6164s-projects.vercel.app,https://frontend-git-main-poojasrikandhula-6164s-projects.vercel.app"
-    ).split(",")
+# Always retain the production frontend origin even when CORS_ORIGINS is
+# configured in Render. Environment configuration extends the known safe
+# origins instead of accidentally replacing them.
+default_cors_origins = {
+    "http://localhost:5173",
+    "https://frontend-5fcio5bcj-poojasrikandhula-6164s-projects.vercel.app",
+    "https://frontend-plum-mu-90.vercel.app",
+    "https://frontend-poojasrikandhula-6164s-projects.vercel.app",
+    "https://frontend-git-main-poojasrikandhula-6164s-projects.vercel.app",
+}
+configured_cors_origins = {
+    origin.strip().rstrip("/")
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
     if origin.strip()
-]
+}
+cors_origins = sorted(default_cors_origins | configured_cors_origins)
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
