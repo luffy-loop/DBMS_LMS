@@ -475,8 +475,8 @@ async def create_assignment(
 
     reference_answer = (reference_answer or "").strip()
     criteria = [line.strip() for line in (marking_criteria or "").splitlines() if line.strip()]
-    if reference_answer and (max_marks < 1 or max_marks > 100):
-        raise HTTPException(status_code=400, detail="AI-assisted correction maximum marks must be between 1 and 100")
+    if max_marks < 1 or max_marks > 1000:
+        raise HTTPException(status_code=400, detail="Assessment total marks must be between 1 and 1000")
     if len(reference_answer) > 10000:
         raise HTTPException(status_code=400, detail="Reference answer must be 10,000 characters or fewer")
     if len(criteria) > 20 or any(len(line) > 300 for line in criteria):
@@ -501,7 +501,8 @@ async def create_assignment(
         type=type,
         start_time=normalize_datetime(start_time),
         end_time=normalize_datetime(end_time),
-        duration_minutes=duration_minutes
+        duration_minutes=duration_minutes,
+        max_marks=max_marks
     )
     db.add(assignment)
     db.flush()
