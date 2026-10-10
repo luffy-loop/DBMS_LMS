@@ -940,9 +940,8 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             if row.review_status != "needs_review":
                 row.review_status = "needs_review"
 
-    # Submission.marks is reserved for teacher-approved final marks.
-    submission.marks = None
-    submission.marks_published = False
+    # AI evaluation only updates question-level suggestions and review state.
+    # Preserve any teacher-finalized marks and publication state during re-evaluation.
     db.commit()
     record_audit(db, user["id"], "assessment_ai_correction_completed", "submission", submission.id, {
         "assignment_id": assignment.id,
