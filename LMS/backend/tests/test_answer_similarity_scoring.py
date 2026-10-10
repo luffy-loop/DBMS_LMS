@@ -2,6 +2,9 @@ import os
 os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
+from types import SimpleNamespace
+
+import evaluation_service as es
 from evaluation_service import calculate_lexical_answer_score
 
 
@@ -29,3 +32,30 @@ def test_lexical_score_is_bounded_and_empty_answers_score_zero():
     assert calculate_lexical_answer_score("Some student answer", "") == 0.0
     score = calculate_lexical_answer_score("A unique identifier key", "A primary key is unique")
     assert 0.0 <= score <= 1.0
+
+
+def test_rubric_evaluator_grants_partial_credit_for_close_paraphrase(monkeypatch):
+    reference = "Primary key is unique identification"
+    answer = "The primary key is the unique and different identification of database"
+    vector = [1.0] + [0.0] * 383
+    criterion = SimpleNamespace(
+        id=1,
+        criterion_text=reference,
+        max_marks=10.0,
+        criterion_embedding=vector,
+    )
+    monkeypatch.setattr(es, "generate_embedding", lambda text: vector)
+    monkeypatch.setattr(es, "compute_pgvector_similarity", lambda db, a, b: 0.10)
+    monkeypatch.setattr(
+        es,
+        "classify_nli",
+        lambda premise, hypothesis: {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0},
+    )
+
+    marks, similarity, result = es.evaluate_hybrid_descriptive(
+        None, answer, 10, reference, vector, [criterion]
+    )
+
+    assert 0 < marks <= 10
+    assert result["criteria"][0]["awarded_marks"] >= 7
+    assert result["criteria"][0]["covered"] is True
