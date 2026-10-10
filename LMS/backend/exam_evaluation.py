@@ -907,13 +907,26 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
         # blocking on large embedding/NLI model downloads for simple answers while
         # keeping these model-light suggestions explicitly subject to teacher review.
         criteria_rows = rubrics_by_qid.get(question.id, [])
-        if len(student_answer.split()) <= 20 and len(reference_answer.split()) <= 16:
-            lexical_reference = es.calculate_lexical_answer_score(student_answer, reference_answer)
+        if len(student_answer.split()) <= 30:
+            # A short student answer may be correct even when the teacher's
+            # reference is detailed. Compare against the whole reference AND
+            # its individual sentences, so extra explanatory detail does not
+            # force valid concise answers into a model-only path that may be
+            # unavailable on a cold/free deployment.
+            reference_parts = [
+                part.strip() for part in re.split(r"(?<=[.!?])\\s+", reference_answer)
+                if len(part.split()) >= 3
+            ]
+            lexical_scores = [
+                es.calculate_lexical_answer_score(student_answer, candidate)
+                for candidate in [reference_answer, *reference_parts]
+            ]
+            lexical_reference = max(lexical_scores, default=0.0)
             contradiction, contradiction_details, _ = es.detect_contradictions_and_correctness(
                 student_answer, reference_answer,
                 [str(getattr(item, "criterion_text", "")) for item in criteria_rows]
             )
-            if lexical_reference >= 0.50 and not contradiction:
+            if lexical_reference >= 0.35 and not contradiction:
                 if criteria_rows:
                     criteria_results = []
                     awarded_total = 0.0
@@ -944,17 +957,17 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 row.student_embedding = None
                 row.evaluation_status = "evaluated"
                 row.evaluator_version = "lexical-short-answer-v1"
-                row.evaluator_confidence = min(0.74, max(0.55, lexical_reference))
+                row.evaluator_confidence = min(0.68, max(0.50, lexical_reference))
                 row.evaluated_at = get_now()
                 row.review_status = "needs_review"
                 row.rubric_evaluation = json.dumps({
                     "summary": "A concise answer matched key concepts without a detected contradiction.",
-                    "feedback": "Suggested partial/full credit is based on lexical concept overlap (" + str(round(lexical_reference * 100)) + "%). This fast path avoids waiting for semantic model startup; teacher review is required.",
+                    "feedback": "Suggested marks are based on concept overlap against the reference answer and its individual sentences (" + str(round(lexical_reference * 100)) + "%). This model-light estimate may miss paraphrases; teacher review is required.",
                     "matched_concepts": matched_terms,
                     "missing_concepts": missing_terms,
                     "criteria": criteria_results,
-                    "scoring_method": "lexical-short-answer-v1",
-                    "review_reason": "Concise-answer fast path; teacher confirmation required.",
+                    "scoring_method": "lexical-reference-sentence-v2",
+                    "review_reason": "Concise-answer concept-overlap estimate; teacher confirmation required.",
                 })
                 continue
 
