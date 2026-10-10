@@ -42,12 +42,13 @@ export default function Login() {
       sessionStorage.setItem("name", data.name)
       sessionStorage.setItem("userId", data.id)
 
+      const authenticatedSession = { id: data.id, name: data.name, role: data.role }
       if (data.role === "teacher") {
-        navigate("/teacher")
+        navigate("/teacher", { replace: true, state: { authenticatedSession } })
       } else if (data.role === "admin") {
-        navigate("/admin")
+        navigate("/admin", { replace: true, state: { authenticatedSession } })
       } else {
-        navigate("/dashboard")
+        navigate("/dashboard", { replace: true, state: { authenticatedSession } })
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed")
