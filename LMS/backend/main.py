@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
-from database import Base, engine, get_db
+from database import Base, engine, get_db, SessionLocal
 from models import User, Course, Enrollment, Assignment, Submission
 from schemas import Register, Login, CourseCreate, CourseUpdate, EnrollmentCreate, AssignmentCreate, SubmissionCreate, AdminUserCreate, AdminRoleUpdate
 from auth import get_user, key, alg
@@ -143,6 +143,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"https://frontend(?:-[a-z0-9-]+)?(?:-poojasrikandhula-6164s-projects)?\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -825,8 +826,27 @@ def get_assignments(course_id: int, user=Depends(get_user), db: Session = Depend
         "handout": handouts_map.get(a.id)
     } for a in assignments]
 
+def notify_submission_received(teacher_id: int, assignment_title: str, assignment_id: int):
+    notification_db = SessionLocal()
+    try:
+        notify_users(
+            notification_db,
+            [teacher_id],
+            "submission_received",
+            "New submission",
+            f"A student submitted {assignment_title}.",
+            "assignment",
+            assignment_id,
+        )
+    except Exception:
+        logger.exception("Submission notification failed assignment_id=%s", assignment_id)
+    finally:
+        notification_db.close()
+
+
 @app.post("/submissions")
 def submit_assignment(
+    background_tasks: BackgroundTasks,
     assignment_id: int = Form(...),
     answer: str = Form(""),
     answers_json: str | None = Form(None),
@@ -839,13 +859,16 @@ def submit_assignment(
     assignment = db.query(Assignment).filter(Assignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    enrollment = db.query(Enrollment.id).filter(Enrollment.student_id == user["id"], Enrollment.course_id == assignment.course_id).first()
+    enrollment = db.query(Enrollment.id).filter(
+        Enrollment.student_id == user["id"],
+        Enrollment.course_id == assignment.course_id
+    ).first()
     if not enrollment:
         raise HTTPException(status_code=403, detail="You must be enrolled in this course to submit")
 
     now = get_now()
-    start = normalize_datetime(assignment.start_time)
-    if start and now < start:
+    start_time = normalize_datetime(assignment.start_time)
+    if start_time and now < start_time:
         raise HTTPException(status_code=400, detail="This assessment is not open yet")
     deadline = assessment_deadline(assignment)
     if deadline and now >= deadline:
@@ -856,27 +879,34 @@ def submit_assignment(
         Submission.student_id == user["id"]
     ).first()
     if old:
-        raise HTTPException(status_code=400, detail="You have already submitted this assessment")
+        raise HTTPException(status_code=409, detail="You have already submitted this assessment")
 
     file_data = None
+    file_content = ""
     if file:
         file_data, file_content = read_pdf_upload_sync(file)
 
-    if not answer.strip() and not file_data and not answers_json:
+    if not answer.strip() and not file_data and not (answers_json and answers_json.strip()):
         raise HTTPException(status_code=400, detail="Write an answer, select options, or upload a PDF")
 
-    from models import AssessmentQuestion
+    from models import AssessmentQuestion, AssessmentQuestionOption, StudentQuestionAnswer
     assessment_questions = db.query(AssessmentQuestion).filter(
         AssessmentQuestion.assignment_id == assignment.id
     ).order_by(AssessmentQuestion.order_index, AssessmentQuestion.id).all()
     has_questions = bool(assessment_questions)
+    answers_map = {}
 
     if answers_json or has_questions:
-        import json
         try:
-            answers_map = parse_question_answers(answers_json, {question.id for question in assessment_questions})
+            answers_map = parse_question_answers(
+                answers_json,
+                {question.id for question in assessment_questions}
+            )
             answers_map, _mapping_status = map_pdf_answers(
-                assessment_questions, answers_map, answer, file_content if file_data else "",
+                assessment_questions,
+                answers_map,
+                answer,
+                file_content if file_data else "",
                 readable_pdf=(len((file_content or "").split()) >= 2) if file_data else None,
             )
         except ValueError as exc:
@@ -888,67 +918,104 @@ def submit_assignment(
                 }) from exc
             raise HTTPException(status_code=400, detail=detail) from exc
 
-        try:
-            submission, recorded = evaluate_and_record_exam(assignment, user["id"], answers_map, db)
-        except HTTPException as exc:
-            if exc.status_code == 500 and db.query(Submission.id).filter(
-                Submission.assignment_id == assignment.id,
-                Submission.student_id == user["id"],
-            ).first():
-                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
-            raise
-        if answer.strip():
-            submission.answer = answer.strip()
-            db.commit()
-    else:
-        submission = Submission(
-            assignment_id=assignment.id,
-            student_id=user["id"],
-            answer=answer.strip()
-        )
-        db.add(submission)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            if db.query(Submission.id).filter(
-                Submission.assignment_id == assignment.id,
-                Submission.student_id == user["id"],
-            ).first():
-                raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
-            raise
+        for question in assessment_questions:
+            selected_option_id = answers_map.get(question.id, {}).get("selected_option_id")
+            if selected_option_id is not None:
+                option = db.query(AssessmentQuestionOption).filter(
+                    AssessmentQuestionOption.id == selected_option_id,
+                    AssessmentQuestionOption.question_id == question.id
+                ).first()
+                if not option:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Selected option {selected_option_id} does not belong to question {question.id}"
+                    )
+
+    # Persist the student's work first. AI inference is deliberately not run inside
+    # this request: loading the embedding/NLI models can exceed the Render free
+    # instance memory limit and make the browser report a CORS/network failure.
+    submission = Submission(
+        assignment_id=assignment.id,
+        student_id=user["id"],
+        answer=answer.strip() or ("Exam submission received." if has_questions else ""),
+        marks=None,
+        marks_published=False,
+    )
+    db.add(submission)
+    try:
+        db.flush()
+        if has_questions:
+            for question in assessment_questions:
+                answer_data = answers_map.get(question.id, {})
+                student_answer = (answer_data.get("student_answer") or "").strip()
+                manual_review = bool(answer_data.get("manual_review_required"))
+                db.add(StudentQuestionAnswer(
+                    submission_id=submission.id,
+                    question_id=question.id,
+                    student_id=user["id"],
+                    question_type=question.question_type,
+                    selected_option_id=answer_data.get("selected_option_id"),
+                    student_answer=student_answer if question.question_type == "descriptive" else None,
+                    reference_answer=None,
+                    student_embedding=None,
+                    similarity_score=None,
+                    awarded_marks=0.0,
+                    max_marks=question.max_marks,
+                    evaluation_status="pending",
+                    evaluated_at=now,
+                    evaluator_version=None,
+                    evaluator_confidence=None,
+                    review_status="needs_review",
+                    rubric_evaluation=json.dumps({
+                        "summary": "Submission saved; awaiting teacher-triggered AI correction.",
+                        "feedback": (
+                            "The PDF text could not be extracted reliably. Teacher review is required."
+                            if manual_review else
+                            "Answers are saved. A teacher can run Correct with AI; suggested marks remain separate from finalized marks."
+                        ),
+                        "matched_concepts": [],
+                        "missing_concepts": [],
+                        "criteria": [],
+                    }),
+                ))
+        db.commit()
         db.refresh(submission)
+    except IntegrityError as exc:
+        db.rollback()
+        if db.query(Submission.id).filter(
+            Submission.assignment_id == assignment.id,
+            Submission.student_id == user["id"],
+        ).first():
+            raise HTTPException(status_code=409, detail="You have already submitted this assessment") from exc
+        raise
 
     if file_data:
         try:
-            mongo_db.submission_files.insert_one(
-                {
-                    "submission_id": submission.id,
-                    "assignment_id": assignment.id,
-                    "student_id": user["id"],
-                    "filename": safe_upload_filename(file.filename),
-                    "content_type": "application/pdf",
-                    "file": file_data,
-                    "created_at": datetime.utcnow()
-                }
-            )
+            mongo_db.submission_files.insert_one({
+                "submission_id": submission.id,
+                "assignment_id": assignment.id,
+                "student_id": user["id"],
+                "filename": safe_upload_filename(file.filename),
+                "content_type": "application/pdf",
+                "file": file_data,
+                "created_at": datetime.utcnow(),
+            })
         except Exception:
             logger.exception("Submission PDF storage failed submission_id=%s", submission.id)
             mongo_cleanup_ok = True
             try:
-                mongo_db.submission_files.delete_many(
-                    {"submission_id": submission.id}
-                )
+                mongo_db.submission_files.delete_many({"submission_id": submission.id})
             except Exception:
                 mongo_cleanup_ok = False
                 logger.exception("Submission PDF compensation failed submission_id=%s", submission.id)
             db_cleanup_ok = True
             try:
-                from models import StudentQuestionAnswer
                 db.query(StudentQuestionAnswer).filter(
                     StudentQuestionAnswer.submission_id == submission.id
                 ).delete(synchronize_session=False)
-                db.query(Submission).filter(Submission.id == submission.id).delete(synchronize_session=False)
+                db.query(Submission).filter(
+                    Submission.id == submission.id
+                ).delete(synchronize_session=False)
                 db.commit()
             except Exception:
                 db.rollback()
@@ -970,8 +1037,20 @@ def submit_assignment(
                 },
             )
 
-    notify_users(db, [assignment.teacher_id], "submission_received", "New submission", f"A student submitted {assignment.title}.", "assignment", assignment.id)
-    return {"message": "Submission successful", "id": submission.id, "marks": submission.marks if submission.marks_published else None, "marks_published": bool(submission.marks_published), "grading_status": "published" if submission.marks_published else ("awaiting_publication" if submission.marks is not None else "awaiting_grading"), "submitted_at": submission.created_at.isoformat() if submission.created_at else None}
+    background_tasks.add_task(
+        notify_submission_received,
+        assignment.teacher_id,
+        assignment.title,
+        assignment.id,
+    )
+    return {
+        "message": "Submission successful",
+        "id": submission.id,
+        "marks": None,
+        "marks_published": False,
+        "grading_status": "awaiting_grading" if has_questions else "awaiting_teacher_review",
+        "submitted_at": submission.created_at.isoformat() if submission.created_at else None,
+    }
 
 def parse_question_answers(raw_answers: str | None, valid_question_ids: set[int]) -> dict[int, dict]:
     if not raw_answers:
