@@ -21,6 +21,7 @@ export default function TeacherDashboard() {
   const [files,setFiles] = useState<File[]>([])
   const [progress,setProgress] = useState<Record<string,number>>({})
   const [statuses,setStatuses] = useState<Record<string,string>>({})
+  const [resourceIds,setResourceIds] = useState<Record<string,string>>({})
   const [errors,setErrors] = useState<Record<string,string>>({})
   const [busy,setBusy] = useState(false)
   const [message,setMessage] = useState("")
@@ -75,47 +76,85 @@ export default function TeacherDashboard() {
   function removeFile(name:string) {
     setFiles(current => current.filter(file => file.name !== name))
     setProgress(current => { const next={...current}; delete next[name]; return next })
+    setResourceIds(current => { const next={...current}; delete next[name]; return next })
+    setStatuses(current => { const next={...current}; delete next[name]; return next })
+    setErrors(current => { const next={...current}; delete next[name]; return next })
   }
 
   async function uploadAll() {
-    if (!courseId || !files.length) return
+    const pending = files.filter(file => statuses[file.name] !== "READY")
+    if (!courseId || !pending.length) return
     setBusy(true); setError(""); setMessage("")
-    for (const file of files) {
-      setStatuses(current => ({...current,[file.name]:"UPLOADING"}))
-      setProgress(current => ({...current,[file.name]:0}))
-      try {
-        const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})))
-        const first = (result as {files?:Array<{id?:string;status:string;error?:string}>}).files?.[0]
-        if (!first || first.status === "FAILED") throw new Error(first?.error || "Upload failed")
-        setStatuses(current => ({...current,[file.name]:"PROCESSING"}))
-        await waitForReady(first.id || "", file.name)
-      } catch(e) {
-        const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Upload failed"
-        setStatuses(current => ({...current,[file.name]:"FAILED"}))
-        setErrors(current => ({...current,[file.name]:message}))
+    let allReady = true
+    try {
+      for (const file of pending) {
+        const existingId = resourceIds[file.name]
+        if (statuses[file.name] === "TIMEOUT" && existingId) {
+          const status = await waitForReady(existingId, file.name)
+          if (status !== "READY") allReady = false
+          continue
+        }
+        setStatuses(current => ({...current,[file.name]:"UPLOADING"}))
+        setErrors(current => ({...current,[file.name]:""}))
+        setProgress(current => ({...current,[file.name]:0}))
+        try {
+          const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})))
+          const first = (result as {files?:Array<{id?:string;status:string;error?:string}>}).files?.[0]
+          if (!first || first.status === "FAILED") throw new Error(first?.error || "Upload failed")
+          if (first.id) setResourceIds(current => ({...current,[file.name]:first.id!}))
+          if (first.status === "READY") {
+            setStatuses(current => ({...current,[file.name]:"READY"}))
+            setProgress(current => ({...current,[file.name]:100}))
+            continue
+          }
+          if (!first.id) throw new Error("Upload completed without a processing ID. Remove the file and try again.")
+          setStatuses(current => ({...current,[file.name]:"PROCESSING"}))
+          const status = await waitForReady(first.id, file.name)
+          if (status !== "READY") allReady = false
+        } catch(e) {
+          allReady = false
+          const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Upload failed"
+          setStatuses(current => ({...current,[file.name]:"FAILED"}))
+          setErrors(current => ({...current,[file.name]:message}))
+        }
       }
+      await load()
+      if (allReady) {
+        setMessage("All selected learning materials are uploaded and ready.")
+        setShowUpload(false)
+      } else {
+        setMessage("Upload batch finished with items that need attention. Successful files will not be uploaded again.")
+      }
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
-    setMessage("Upload batch finished. Each file keeps its own success or failure state.")
-    await load()
   }
 
-  async function waitForReady(id:string, filename:string) {
-    if (!id) return
+  async function waitForReady(id:string, filename:string):Promise<string> {
+    if (!id) {
+      setStatuses(current => ({...current,[filename]:"FAILED"}))
+      setErrors(current => ({...current,[filename]:"The server did not return a resource ID for processing."}))
+      return "FAILED"
+    }
     for(let attempt=0; attempt<60; attempt++) {
       try {
         const data = await apiJson<{status:string;error_message?:string|null}>("/resources/" + id + "/status",{},10000)
         setStatuses(current => ({...current,[filename]:data.status}))
-        if (data.status === "READY") return
+        if (data.status === "READY") {
+          setErrors(current => ({...current,[filename]:""}))
+          setProgress(current => ({...current,[filename]:100}))
+          return "READY"
+        }
         if (data.status === "FAILED") {
-          setErrors(current => ({...current,[filename]:data.error_message || "Processing failed"}))
-          return
+          setErrors(current => ({...current,[filename]:data.error_message || "Processing failed. Remove this item and upload it again if needed."}))
+          return "FAILED"
         }
       } catch {}
       await new Promise(resolve => window.setTimeout(resolve,2000))
     }
     setStatuses(current => ({...current,[filename]:"TIMEOUT"}))
-    setErrors(current => ({...current,[filename]:"Processing is still running. You can leave this page and check the material status later."}))
+    setErrors(current => ({...current,[filename]:"Processing is still running. Close this window safely and reopen it later to check status."}))
+    return "TIMEOUT"
   }
 
   const overall = files.length ? Math.round(files.reduce((sum,file) => sum + (progress[file.name] || 0),0) / files.length) : 0
@@ -153,15 +192,15 @@ export default function TeacherDashboard() {
           </form>
         </Modal>}
 
-        {showUpload && <Modal title="Upload learning materials" onClose={()=>{if(!busy)setShowUpload(false)}}>
+        {showUpload && <Modal title="Upload learning materials" onClose={()=>setShowUpload(false)}>
           <div className="space-y-5">
             <Field label="Course">
-              <select value={courseId} onChange={e=>setCourseId(e.target.value)} className="lms-input">
+              <select value={courseId} disabled={busy} onChange={e=>setCourseId(e.target.value)} className="lms-input">
                 {courses.map(course=><option key={course.id} value={course.id}>{course.title}</option>)}
               </select>
             </Field>
             <label className="block cursor-pointer rounded-2xl border border-dashed border-white/15 bg-white/[.025] p-7 text-center hover:border-violet-400/30">
-              <input type="file" multiple accept={ACCEPT} className="sr-only" onChange={e=>addFiles(e.target.files)} />
+              <input type="file" multiple accept={ACCEPT} disabled={busy} className="sr-only" onChange={e=>addFiles(e.target.files)} />
               <Upload className="mx-auto text-violet-300" size={28}/>
               <p className="mt-3 text-sm font-medium">Choose multiple files</p>
               <p className="mt-1 text-xs text-white/35">PDF, DOCX, DOC, PPTX, PPT, TXT, MD, PNG, JPG, JPEG, WEBP, CSV, XLSX · max {MAX_FILES} files · {10} MB/file</p>
@@ -178,7 +217,7 @@ export default function TeacherDashboard() {
                 </div>)}
               </div>
             </div>}
-            <button disabled={busy || !files.length || !courseId} onClick={uploadAll} className="lms-btn-primary w-full rounded-xl py-3 text-sm disabled:opacity-40">{busy ? <><Loader2 size={16} className="animate-spin"/>Processing uploads...</> : <><Upload size={16}/>Upload all</>}</button>
+            <button disabled={busy || !files.some(file => statuses[file.name] !== "READY") || !courseId} onClick={uploadAll} className="lms-btn-primary w-full rounded-xl py-3 text-sm disabled:opacity-40">{busy ? <><Loader2 size={16} className="animate-spin"/>Processing uploads...</> : files.some(file => statuses[file.name] !== "READY") ? <><Upload size={16}/>{files.some(file => statuses[file.name] === "FAILED") ? "Retry unfinished files" : "Upload remaining files"}</> : "All files ready"}</button>
           </div>
         </Modal>}
       </div>
