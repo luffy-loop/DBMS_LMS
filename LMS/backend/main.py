@@ -86,6 +86,7 @@ configured_cors_origins = {
     if origin.strip()
 }
 cors_origins = sorted(default_cors_origins | configured_cors_origins)
+logger.info("CORS allowlist loaded for %d explicit origins; Vercel frontend preview origins are enabled", len(cors_origins))
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -143,7 +144,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://frontend(?:-[a-z0-9-]+)?(?:-poojasrikandhula-6164s-projects)?\.vercel\.app",
+    allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.vercel\.app$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
