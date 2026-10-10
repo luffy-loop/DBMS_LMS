@@ -141,14 +141,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal server error"},
     )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.vercel\.app$",
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS is wrapped around the completed FastAPI app at the end of this module.
+# This ensures even unhandled 500 responses include CORS headers for the frontend.
 app.include_router(learning_router)
 app.include_router(copilot_router)
 app.include_router(quiz_router)
@@ -1895,3 +1889,14 @@ async def ai_search(q:str,user=Depends(get_user),db:Session=Depends(get_db)):
     except Exception:
         logger.exception("Search service failed")
         raise HTTPException(status_code=503,detail={"error":"SEARCH_UNAVAILABLE","message":"Search service unavailable. Please retry."})
+
+
+# Wrap the completed application so CORS headers are present even on error responses.
+app = CORSMiddleware(
+    app=app,
+    allow_origins=cors_origins,
+    allow_origin_regex=r"^https://frontend(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\\.vercel\\.app$".replace(r"\\.", r"\."),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
