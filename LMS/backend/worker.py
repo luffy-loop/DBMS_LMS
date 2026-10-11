@@ -89,11 +89,11 @@ def _claim_quiz_job():
 def _recover_stale_materials():
     """Stop automatic retries after the configured limit for expired leases."""
     try:
-        cutoff = datetime.utcnow() - timedelta(seconds=max(60, int(os.getenv("RESOURCE_PROCESSING_LEASE_SECONDS", "600"))))
+        now = datetime.utcnow()
         stale = mongo_db.resources.find({
             "assignment_id": {"$exists": False},
             "processing_status": "PROCESSING",
-            "processing_lease_until": {"$lt": cutoff},
+            "processing_lease_until": {"$lt": now},
             "processing_attempts": {"$gte": MAX_ATTEMPTS},
         }).limit(25)
         for row in stale:
@@ -114,11 +114,13 @@ def _next_material_id():
         row = mongo_db.resources.find_one(
             {
                 "assignment_id": {"$exists": False},
-                "processing_attempts": {"$lt": MAX_ATTEMPTS},
-                "$or": [
-                    {"processing_status": "UPLOADED"},
-                    {"processing_status": "PROCESSING", "processing_lease_until": {"$lt": now}},
-                    {"processing_status": "PROCESSING", "processing_lease_until": {"$exists": False}, "updated_at": {"$lt": stale_before}},
+                "$and": [
+                    {"$or": [{"processing_attempts": {"$lt": MAX_ATTEMPTS}}, {"processing_attempts": {"$exists": False}}]},
+                    {"$or": [
+                        {"processing_status": "UPLOADED"},
+                        {"processing_status": "PROCESSING", "processing_lease_until": {"$lt": now}},
+                        {"processing_status": "PROCESSING", "processing_lease_until": {"$exists": False}, "updated_at": {"$lt": stale_before}},
+                    ]},
                 ],
             },
             {"_id": 1},

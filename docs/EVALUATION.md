@@ -15,17 +15,17 @@ PostgreSQL remains the authoritative relational store. Existing ownership/query 
 ## Performance
 LMS/backend/tests/performance/benchmark.py is a repeatable HTTP benchmark reporting average, min/max, p50, p95, error rate, throughput, concurrency, and duration. Safe scenarios include /, /health, and /courses.
 
-Actual live performance values are not recorded because the validation environment could not reach the deployed Render service. Status: **Not measured — outbound access to the deployed Render service was unavailable.**
+GitHub Actions now records a live Render `/health` benchmark artifact with status counts, average/min/max and p50/p95 latency, error rate, throughput, concurrency and duration. This is a health-endpoint sample only, not authenticated application capacity. The opt-in `tests/performance/workflow_benchmark.py` script measures a dedicated teacher/student workflow including upload, search, submission, grading and publication; it has not been run against production as part of CI.
 
 ## Deployment
 Backend: https://dbms-lms-hwvp.onrender.com
 Frontend: https://frontend-plum-mu-90.vercel.app/
 Frontend API variable: https://dbms-lms-hwvp.onrender.com
 
-Live root, health, readiness, and CORS verification: **Not executed — outbound access to the deployed Render service was unavailable.**
+CI has measured the live `/health` endpoint. Live browser acceptance, authenticated workflow timing, readiness against the deployed database dependencies, and a full student/teacher acceptance run remain manual release checks.
 
 ## Docker
-The repository contains Docker configuration for FastAPI, PostgreSQL/pgvector, MongoDB, persistent volumes, networking, and health checks. Runtime execution: **Not executed — Docker runtime was not used during this validation.**
+The repository contains Docker configuration for FastAPI, PostgreSQL/pgvector, MongoDB, persistent volumes, networking, health checks, and a separate durable worker service. Docker runtime execution still requires a local or deployment smoke test.
 
 ## Postman
 The checked-in collection covers authentication, profile, courses, assignments, submissions, marks, resources, notifications, AI/analytics, admin, and health/readiness. No credentials or JWTs are committed. Postman runtime execution: **Not executed — Postman runtime was unavailable.**
@@ -43,7 +43,7 @@ See docs/usability-evaluation.md. **Requires real participants.** No participant
 Alembic contains a non-destructive baseline. Existing deployments must be verified and stamped before future revisions are applied. Destructive downgrade is intentionally disabled.
 
 ## Limitations and future work
-Live deployment checks, live performance numbers, Docker runtime execution, Postman runtime execution, and participant usability results were not available in this validation environment. Large-scale load testing and independently deployed microservices remain future work.
+Live deployment checks, live performance numbers, Docker runtime execution, Postman runtime execution, and participant usability results were not available in this validation environment. Large-scale load testing and independently deployed domain microservices remain future work. The durable worker is a separate process, not a full microservices decomposition.
 
 
 ## Final UX / reliability pass
@@ -60,6 +60,6 @@ The current AI quiz implementation is retrieval-grounded rather than an external
 
 The GitHub repository tree was modified directly because the validation environment could not clone GitHub over outbound network access. Consequently, local execution of the full backend test suite, frontend build, browser accessibility audit, Docker runtime, Postman runtime and deployed Render endpoint checks were not executed in this environment.
 
-No production performance numbers are fabricated. Live AI, upload and search latency remain **NOT MEASURED — deployment/network limitation** until the benchmark is run against the deployed service.
+No authenticated workflow performance numbers are claimed until the dedicated workflow benchmark is run. CI health endpoint latency is reported only as health endpoint evidence, not AI, upload, or search latency.
 
 The code changes are intended to remove indefinite waits and architecture-level bottlenecks, but this document does not label the system production-ready merely because the source tree was updated.

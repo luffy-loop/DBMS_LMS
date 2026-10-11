@@ -49,4 +49,4 @@ Run one complete student/teacher workflow after deployment: create course, uploa
 
 ## Operational boundary
 
-Resource extraction and vector indexing are separate stages. A semantic-index failure should preserve successfully extracted content for the lexical fallback. Background tasks currently execute in the API process; durable job state does not guarantee that an interrupted task automatically resumes after a process restart. A durable external worker/queue remains future work.
+Resource extraction and vector indexing are separate stages. A semantic-index failure should preserve successfully extracted content for lexical fallback. Material records and quiz jobs are persisted and the repository now includes a poll-based worker with leases and bounded recovery attempts. Deploy the worker as a separate long-running service and verify restart recovery; Docker Compose includes it for local deployment. An API-only deployment does not run the worker, and a broker-backed queue remains a future scalability option.

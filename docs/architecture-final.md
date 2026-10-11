@@ -16,11 +16,11 @@ The LMS remains a modular monolith.
 - Analytics/learning-insights modules
 - React/Vite frontend
 
-The modules share one deployment/runtime but have explicit responsibilities and service boundaries. No independent microservices were introduced.
+The FastAPI API remains a modular monolith. A separately runnable durable worker process consumes persisted material-processing records from MongoDB and quiz jobs from PostgreSQL. The API and worker are not a set of independently deployed domain microservices; the worker is a separate execution process with a narrow queue-consumer responsibility.
 
 ## Reliability boundaries
 
-Uploads, extraction and indexing are separated. AI quiz generation is represented by a PostgreSQL job record. Frontend API calls use a centralized timeout/error/request-ID client.
+Uploads are persisted before processing. The worker polls durable MongoDB resource state and PostgreSQL AI-job state, claims quiz work with row locking, uses MongoDB processing leases, and recovers stale quiz jobs with bounded retry counts. The API may still opportunistically dispatch material processing in-process; the separate worker provides restart recovery when deployed. Frontend API calls use a centralized timeout/error/request-ID client.
 
 ## Data boundaries
 
@@ -28,4 +28,4 @@ PostgreSQL is authoritative for users, courses, enrollments, assignments, submis
 
 ## Known limitation
 
-FastAPI background tasks are still process-local execution. The job state is durable, but the work itself is not resumed automatically after a process restart. A dedicated worker/queue is a future scaling step, not a requirement for the current modular-monolith deployment.
+The durable worker is included in Docker Compose but must also be deployed as a separate long-running production service with the same PostgreSQL and MongoDB configuration. If only the API service is deployed, queued quiz jobs will not be consumed by this worker. This design improves durability but is not a substitute for a broker-backed queue or independently scalable domain microservices.
