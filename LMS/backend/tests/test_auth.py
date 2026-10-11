@@ -3,6 +3,7 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
 from datetime import datetime, timedelta
+import time
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
@@ -50,6 +51,17 @@ def test_expired_token_is_rejected():
         assert exc.status_code == 401
 
 
+def test_token_without_expiration_is_rejected():
+    token = jwt.encode({"id": 7, "role": "student"}, key, algorithm=alg)
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    try:
+        get_user(creds)
+        assert False, "A token without exp must be rejected"
+    except HTTPException as exc:
+        assert exc.status_code == 401
+        assert exc.detail == "Invalid token"
+
+
 def test_valid_token_returns_current_database_role():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -57,7 +69,7 @@ def test_valid_token_returns_current_database_role():
     db = TestingSession()
     db.add(User(id=7, name="Test", email="TEST007", password=pwd.hash("password"), role="student", section="A1"))
     db.commit()
-    token = jwt.encode({"id": 7, "role": "admin"}, key, algorithm=alg)
+    token = jwt.encode({"id": 7, "role": "admin", "exp": int(time.time()) + 300}, key, algorithm=alg)
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     try:
         assert get_user(creds, db) == {"id": 7, "role": "student"}
@@ -107,6 +119,7 @@ def test_login_success_and_failure():
         claims = jwt.decode(success.json()["token"], key, algorithms=[alg])
         assert claims["id"] == success.json()["id"]
         assert claims["role"] == "student"
+        assert claims["exp"] > int(time.time())
         assert failure.status_code == 401
         assert failure.json()["detail"] == "Invalid roll number or password"
         assert missing.status_code == 401
@@ -132,7 +145,7 @@ def test_role_boundaries_use_current_database_role():
         yield db
     app.dependency_overrides[get_db] = override_db
     def make_token(role):
-        return jwt.encode({"id": 7, "role": role}, key, algorithm=alg)
+        return jwt.encode({"id": 7, "role": role, "exp": int(time.time()) + 300}, key, algorithm=alg)
     try:
         with TestClient(app) as client:
             assert client.get("/teacher", headers={"Authorization": f"Bearer {make_token('student')}"}).status_code == 403
