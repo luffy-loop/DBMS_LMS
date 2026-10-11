@@ -10,12 +10,14 @@ from mongodb import mongo_db
 client = chromadb.PersistentClient(path="./vector_data")
 collection = client.get_or_create_collection("lms_resources")
 CACHE_TTL = 45
+SEARCH_CACHE_MAX_ENTRIES = 64
+SEARCH_CACHE_MAX_QUERY_CHARS = 300
 _cache = {}
 _vectors_reconciled = False
 VECTOR_PAGE_SIZE = 100
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=8)
 def _embed_text(text):
     from evaluation_service import generate_embedding
     return generate_embedding(text)
@@ -162,7 +164,8 @@ def _lexical_search(query, resources):
 
 
 def search_resources_detailed(query, course_ids=None):
-    normalized = " ".join((query or "").split()).lower()
+    # Bound cache keys and vector-store query payloads before embedding/searching.
+    normalized = " ".join((query or "").split()).lower()[:SEARCH_CACHE_MAX_QUERY_CHARS]
     ids_key = tuple(sorted(set(course_ids))) if course_ids is not None else None
     cache_key = (normalized, ids_key)
     now = time.monotonic()
@@ -221,7 +224,7 @@ def search_resources_detailed(query, course_ids=None):
             metrics["context_build_ms"] = round((time.perf_counter() - t) * 1000, 2)
         metrics["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
         _cache[cache_key] = (time.monotonic(), results, metrics)
-        if len(_cache) > 512:
+        if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:
             _cache.pop(next(iter(_cache)))
         return results, metrics
     except Exception:
@@ -229,6 +232,8 @@ def search_resources_detailed(query, course_ids=None):
         resources = _resources(ids_key)
         results = _lexical_search(normalized, resources)
         _cache[cache_key] = (time.monotonic(), results, metrics)
+        if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:
+            _cache.pop(next(iter(_cache)))
         return results, metrics
 
 
