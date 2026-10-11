@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pypdf import PdfReader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from passlib.context import CryptContext
 from jose import jwt
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from database import Base, engine, get_db, SessionLocal
 from models import User, Course, Enrollment, Assignment, Submission
 from schemas import Register, Login, CourseCreate, CourseUpdate, EnrollmentCreate, AssignmentCreate, SubmissionCreate, AdminUserCreate, AdminRoleUpdate
@@ -37,6 +38,7 @@ from audit_log import router as audit_router, record_audit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lms.api")
+_recovery_tasks: set[asyncio.Task] = set()
 
 app = FastAPI(title="LMS")
 
@@ -46,31 +48,74 @@ async def startup():
         "RUN_DB_SETUP",
         "true" if os.getenv("ENVIRONMENT", "development").lower() == "production" or os.getenv("RENDER_GIT_COMMIT") else "false",
     ).lower() == "true"
-    if not run_db_setup:
-        return
 
-    def run_migrations():
-        from alembic import command
-        from alembic.config import Config
-        command.upgrade(Config("alembic.ini"), "head")
+    if run_db_setup:
+        def run_migrations():
+            from alembic import command
+            from alembic.config import Config
+            command.upgrade(Config("alembic.ini"), "head")
 
+        try:
+            await asyncio.to_thread(run_migrations)
+        except Exception:
+            logger.exception("Database migrations failed during startup; refusing to start with an unknown schema state")
+            raise
+
+    # Index setup is independent of SQL migration configuration. Unique active
+    # keys close the race between concurrent duplicate uploads and upload retries.
+    index_specs = [
+        lambda: mongo_db.resources.create_index("assignment_id"),
+        lambda: mongo_db.resources.create_index("course_id"),
+        lambda: mongo_db.submission_files.create_index("submission_id"),
+        lambda: mongo_db.resources.create_index("processing_status"),
+        lambda: mongo_db.resources.create_index(
+            "active_content_key", unique=True,
+            partialFilterExpression={"active_content_key": {"$type": "string"}},
+            name="uniq_active_content_key",
+        ),
+        lambda: mongo_db.resources.create_index(
+            [("teacher_id", 1), ("idempotency_key", 1)], unique=True,
+            partialFilterExpression={"idempotency_key": {"$type": "string"}},
+            name="uniq_teacher_idempotency_key",
+        ),
+    ]
+    for create_index in index_specs:
+        try:
+            create_index()
+        except Exception as exc:
+            logger.warning("Optional MongoDB index setup failed: %s", type(exc).__name__)
+
+    # Recover uploads left pending by a process restart. The worker atomically
+    # claims each resource, so multiple API instances can safely scan the same set.
     try:
-        await asyncio.to_thread(run_migrations)
-    except Exception:
-        logger.exception("Database migrations failed during startup; refusing to start with an unknown schema state")
-        raise
-    try:
-        mongo_db.resources.create_index("assignment_id")
-        mongo_db.resources.create_index("course_id")
-        mongo_db.submission_files.create_index("submission_id")
-        mongo_db.resources.create_index("processing_status")
-        mongo_db.resources.create_index([("course_id", 1), ("sha256", 1)], unique=False)
+        now = datetime.utcnow()
+        lease_seconds = max(60, int(os.getenv("RESOURCE_PROCESSING_LEASE_SECONDS", "600")))
+        stale_before = now - timedelta(seconds=lease_seconds)
+        recovery_limit = max(1, min(100, int(os.getenv("RESOURCE_RECOVERY_BATCH_SIZE", "20"))))
+        abandoned = mongo_db.resources.find({
+            "assignment_id": {"$exists": False},
+            "$or": [
+                {"processing_status": "UPLOADED"},
+                {"processing_status": "PROCESSING", "processing_lease_until": {"$lt": now}},
+                {
+                    "processing_status": "PROCESSING",
+                    "processing_lease_until": {"$exists": False},
+                    "updated_at": {"$lt": stale_before},
+                },
+            ],
+        }).sort("created_at", 1).limit(recovery_limit)
+        for resource in abandoned:
+            task = asyncio.create_task(_process_and_notify(str(resource["_id"])))
+            _recovery_tasks.add(task)
+            task.add_done_callback(_recovery_tasks.discard)
     except Exception as exc:
-        logger.warning("Optional MongoDB indexes unavailable: %s", exc)
+        logger.warning("Startup material recovery scan unavailable: %s", type(exc).__name__)
 
 slow_request_ms = float(os.getenv("SLOW_REQUEST_MS", "150"))
 max_upload_mb = max(1, int(os.getenv("MAX_UPLOAD_MB", "10")))
 max_upload_bytes = max_upload_mb * 1024 * 1024
+max_upload_batch_mb = max(max_upload_mb, int(os.getenv("MAX_UPLOAD_BATCH_MB", "30")))
+max_upload_batch_bytes = max_upload_batch_mb * 1024 * 1024
 # Keep known frontend origins enabled even when Render has CORS_ORIGINS set.
 # The environment variable extends this allowlist instead of replacing it.
 default_cors_origins = {
@@ -1564,33 +1609,119 @@ def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     return results
 
 @app.post("/courses/{course_id}/resources/batch")
-async def add_resources_batch(course_id: int, background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), titles: list[str] | None = Form(None), user=Depends(get_user), db: Session = Depends(get_db)):
-    if user["role"] != "teacher": raise HTTPException(status_code=403, detail="Teacher access only")
-    course=db.query(Course).filter(Course.id==course_id,Course.teacher_id==user["id"]).first()
-    if not course: raise HTTPException(status_code=404,detail="Course not found")
-    if not files: raise HTTPException(status_code=400,detail="Select at least one file")
-    if len(files)>20: raise HTTPException(status_code=400,detail="Maximum 20 files per upload batch")
-    results=[]
-    for index,file in enumerate(files):
+async def add_resources_batch(
+    course_id: int,
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    titles: list[str] | None = Form(None),
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+):
+    if user["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Teacher access only")
+    course = db.query(Course).filter(Course.id == course_id, Course.teacher_id == user["id"]).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one file")
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per upload batch")
+    if idempotency_key and not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
+        raise HTTPException(status_code=400, detail="Invalid Idempotency-Key header")
+
+    results = []
+    batch_bytes = 0
+    for index, file in enumerate(files):
+        resource_id = None
         try:
-            data=await file.read(max_upload_bytes+1)
-            if len(data)>max_upload_bytes: raise HTTPException(status_code=413,detail=f"File exceeds the {max_upload_mb} MB limit")
-            suffix=validate_file(file.filename or "",file.content_type or "",data)
-            title=titles[index] if titles and index<len(titles) else ""
-            meta=build_metadata(file,data,course_id,user["id"],title)
-            duplicate=duplicate_hash(course_id,meta["sha256"])
-            if duplicate: raise HTTPException(status_code=409,detail=f"Duplicate file already exists: {duplicate.get('filename','file')}")
-            insert=await asyncio.to_thread(mongo_db.resources.insert_one,meta)
-            resource_id=str(insert.inserted_id)
-            background_tasks.add_task(_process_and_notify,resource_id)
-            record_audit(db, user["id"], "material_uploaded", "resource", resource_id, {"course_id": course_id, "filename": meta["filename"]})
-            results.append({"id":resource_id,"filename":meta["filename"],"title":meta["title"],"status":"UPLOADED","extension":suffix})
+            data = await file.read(max_upload_bytes + 1)
+            if len(data) > max_upload_bytes:
+                raise HTTPException(status_code=413, detail=f"File exceeds the {max_upload_mb} MB limit")
+            batch_bytes += len(data)
+            if batch_bytes > max_upload_batch_bytes:
+                raise HTTPException(status_code=413, detail=f"Upload batch exceeds the {max_upload_batch_mb} MB total limit")
+
+            suffix = validate_file(file.filename or "", file.content_type or "", data)
+            title = titles[index] if titles and index < len(titles) else ""
+            meta = build_metadata(file, data, course_id, user["id"], title)
+            meta["active_content_key"] = f"{course_id}:{meta['sha256']}"
+            file_key = idempotency_key if len(files) == 1 else None
+            if file_key:
+                existing_request = await asyncio.to_thread(
+                    mongo_db.resources.find_one,
+                    {"teacher_id": user["id"], "idempotency_key": file_key},
+                )
+                if existing_request:
+                    results.append({
+                        "id": str(existing_request["_id"]),
+                        "filename": existing_request.get("filename", file.filename or "file"),
+                        "title": existing_request.get("title", ""),
+                        "status": existing_request.get("processing_status", "UPLOADED"),
+                        "extension": existing_request.get("extension", suffix),
+                    })
+                    continue
+                meta["idempotency_key"] = file_key
+
+            duplicate = await asyncio.to_thread(duplicate_hash, course_id, meta["sha256"])
+            if duplicate:
+                raise HTTPException(status_code=409, detail=f"Duplicate file already exists: {duplicate.get('filename', 'file')}")
+
+            try:
+                insert = await asyncio.to_thread(mongo_db.resources.insert_one, meta)
+            except DuplicateKeyError:
+                if file_key:
+                    existing_request = await asyncio.to_thread(
+                        mongo_db.resources.find_one,
+                        {"teacher_id": user["id"], "idempotency_key": file_key},
+                    )
+                    if existing_request:
+                        results.append({
+                            "id": str(existing_request["_id"]),
+                            "filename": existing_request.get("filename", file.filename or "file"),
+                            "title": existing_request.get("title", ""),
+                            "status": existing_request.get("processing_status", "UPLOADED"),
+                            "extension": existing_request.get("extension", suffix),
+                        })
+                        continue
+                duplicate = await asyncio.to_thread(
+                    mongo_db.resources.find_one, {"active_content_key": meta["active_content_key"]}
+                )
+                if duplicate:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Duplicate file already exists: {duplicate.get('filename', 'file')}",
+                    )
+                raise
+
+            resource_id = str(insert.inserted_id)
+            results.append({
+                "id": resource_id,
+                "filename": meta["filename"],
+                "title": meta["title"],
+                "status": "UPLOADED",
+                "extension": suffix,
+            })
+            background_tasks.add_task(_process_and_notify, resource_id)
+            # MongoDB storage is the upload success boundary. Audit persistence
+            # must not turn a stored file into a false failed-upload response.
+            try:
+                record_audit(
+                    db, user["id"], "material_uploaded", "resource", resource_id,
+                    {"course_id": course_id, "filename": meta["filename"]},
+                )
+            except Exception:
+                logger.exception("Resource stored but upload audit failed; resource_id=%s", resource_id)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         except HTTPException as exc:
-            results.append({"filename":file.filename or "file","status":"FAILED","error":str(exc.detail)})
+            results.append({"id": resource_id, "filename": file.filename or "file", "status": "FAILED", "error": str(exc.detail)})
         except Exception as exc:
-            logger.exception("Upload failed for %s",file.filename)
-            results.append({"filename":file.filename or "file","status":"FAILED","error":str(exc)[:300]})
-    return {"course_id":course_id,"files":results}
+            logger.exception("Upload failed for %s", file.filename)
+            results.append({"id": resource_id, "filename": file.filename or "file", "status": "FAILED", "error": "Upload storage failed; retry safely using the same request key." if idempotency_key else "Upload storage failed. Please retry."})
+    return {"course_id": course_id, "files": results}
 
 
 @app.post("/courses/{course_id}/resources")
@@ -1626,26 +1757,67 @@ def get_resources(course_id:int,user=Depends(get_user),db:Session=Depends(get_db
 
 
 @app.get("/resources/{resource_id}/status")
-def resource_status(resource_id:str,user=Depends(get_user),db:Session=Depends(get_db)):
-    try: resource=mongo_db.resources.find_one({"_id":ObjectId(resource_id)})
-    except Exception: raise HTTPException(status_code=400,detail="Invalid resource id")
-    if not resource: raise HTTPException(status_code=404,detail="Resource not found")
-    course_id=resource.get("course_id")
-    if user["role"]=="student" and not db.query(Enrollment.id).filter(Enrollment.student_id==user["id"],Enrollment.course_id==course_id).first(): raise HTTPException(status_code=403,detail="Access denied")
-    if user["role"]=="teacher" and resource.get("teacher_id")!=user["id"]: raise HTTPException(status_code=403,detail="Access denied")
-    return {"id":resource_id,"status":resource.get("processing_status","UPLOADED"),"extraction_status":resource.get("extraction_status","PENDING"),"indexing_status":resource.get("indexing_status","PENDING"),"error_message":resource.get("error_message")}
+def resource_status(resource_id: str, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in {"student", "teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        resource = mongo_db.resources.find_one({"_id": ObjectId(resource_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid resource id")
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    course_id = resource.get("course_id")
+    if user["role"] == "student":
+        enrolled = db.query(Enrollment.id).filter(
+            Enrollment.student_id == user["id"], Enrollment.course_id == course_id
+        ).first()
+        if not enrolled:
+            raise HTTPException(status_code=403, detail="Access denied")
+    elif user["role"] == "teacher":
+        owns_course = db.query(Course.id).filter(
+            Course.id == course_id, Course.teacher_id == user["id"]
+        ).first()
+        if not owns_course:
+            raise HTTPException(status_code=403, detail="Access denied")
+    return {
+        "id": resource_id,
+        "status": resource.get("processing_status", "UPLOADED"),
+        "extraction_status": resource.get("extraction_status", "PENDING"),
+        "indexing_status": resource.get("indexing_status", "PENDING"),
+        "error_message": resource.get("error_message"),
+    }
 
 
 @app.get("/resources/{resource_id}/download")
-def download_resource(resource_id:str,user=Depends(get_user),db:Session=Depends(get_db)):
-    if user["role"] not in ["student","teacher","admin"]: raise HTTPException(status_code=403,detail="Access denied")
-    try: resource=mongo_db.resources.find_one({"_id":ObjectId(resource_id)})
-    except Exception: raise HTTPException(status_code=400,detail="Invalid resource id")
-    if not resource: raise HTTPException(status_code=404,detail="Resource not found")
-    course_id=resource.get("course_id")
-    if user["role"]=="student" and not db.query(Enrollment.id).filter(Enrollment.student_id==user["id"],Enrollment.course_id==course_id).first(): raise HTTPException(status_code=403,detail="Access denied")
-    if user["role"]=="teacher" and resource.get("teacher_id")!=user["id"]: raise HTTPException(status_code=403,detail="Access denied")
-    return StreamingResponse(iter([resource["file"]]),media_type=resource.get("content_type","application/octet-stream"),headers={"Content-Disposition":f'inline; filename="{resource.get("filename","resource")}"'})
+def download_resource(resource_id: str, user=Depends(get_user), db: Session = Depends(get_db)):
+    if user["role"] not in {"student", "teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        resource = mongo_db.resources.find_one({"_id": ObjectId(resource_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid resource id")
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    course_id = resource.get("course_id")
+    if user["role"] == "student":
+        enrolled = db.query(Enrollment.id).filter(
+            Enrollment.student_id == user["id"], Enrollment.course_id == course_id
+        ).first()
+        if not enrolled:
+            raise HTTPException(status_code=403, detail="Access denied")
+    elif user["role"] == "teacher":
+        owns_course = db.query(Course.id).filter(
+            Course.id == course_id, Course.teacher_id == user["id"]
+        ).first()
+        if not owns_course:
+            raise HTTPException(status_code=403, detail="Access denied")
+    raw_name = os.path.basename(str(resource.get("filename", "resource")).replace("\\", "/"))
+    safe_name = "".join(ch for ch in raw_name if ch.isprintable() and ch not in '\r\n\t"') or "resource"
+    return StreamingResponse(
+        iter([resource["file"]]),
+        media_type=resource.get("content_type", "application/octet-stream"),
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
 
 
 @app.get("/submissions/{submission_id}/download")

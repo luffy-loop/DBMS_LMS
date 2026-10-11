@@ -69,11 +69,11 @@ export async function apiJson<T>(path:string,options:RequestInit={},timeoutMs=15
   return payload as T
 }
 
-export function uploadFile(path:string,file:File,fields:Record<string,string>,onProgress:(value:number)=>void,signal?:AbortSignal){
+export function uploadFile(path:string,file:File,fields:Record<string,string>,onProgress:(value:number)=>void,signal?:AbortSignal,idempotencyKey?:string){
  return new Promise<unknown>((resolve,reject)=>{
   const xhr=new XMLHttpRequest();xhr.open("POST",API+path)
   const token=sessionStorage.getItem("token");if(token)xhr.setRequestHeader("Authorization","Bearer "+token)
-  xhr.setRequestHeader("X-Request-ID",requestId());xhr.responseType="json"
+  xhr.setRequestHeader("X-Request-ID",requestId());if(idempotencyKey)xhr.setRequestHeader("Idempotency-Key",idempotencyKey);xhr.responseType="json"
   xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100))}
   xhr.onload=()=>{const payload=xhr.response??(()=>{try{return JSON.parse(xhr.responseText)}catch{return {}}})();if(xhr.status>=200&&xhr.status<300)resolve(payload);else{if(xhr.status===401)invalidateSessionFor401(path,token);reject(new ApiError(xhr.status,errorMessage(xhr.status,payload?.detail),payload))}}
   xhr.onerror=()=>reject(new ApiError(0,"Unable to reach the LMS backend while uploading"))

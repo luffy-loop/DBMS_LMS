@@ -201,23 +201,52 @@ def prepare_resource(file_id: str):
     resource = mongo_db.resources.find_one({"_id": ObjectId(file_id)})
     if not resource:
         return False
+
+    # If extraction already succeeded, retry indexing from the saved text instead
+    # of paying the CPU/memory cost of parsing the original upload again.
+    extraction_reusable = resource.get("extraction_status") == "READY" and isinstance(resource.get("content"), str)
+    content = resource.get("content", "") if extraction_reusable else None
+    now = datetime.utcnow()
     mongo_db.resources.update_one(
         {"_id": resource["_id"]},
-        {"$set": {"processing_status": "PROCESSING", "extraction_status": "PROCESSING", "indexing_status": "PENDING", "updated_at": datetime.utcnow()}},
+        {"$set": {
+            "processing_status": "PROCESSING",
+            "extraction_status": "READY" if extraction_reusable else "PROCESSING",
+            "indexing_status": "PROCESSING",
+            "updated_at": now,
+        }},
     )
     try:
-        content, metadata = extract_content(resource["file"], resource["extension"])
-        if not content.strip() and resource["extension"] not in {".png", ".jpg", ".jpeg", ".webp"}:
-            raise ValueError("No extractable text found")
-        mongo_db.resources.update_one(
-            {"_id": resource["_id"]},
-            {"$set": {"content": content, "extraction_status": "READY", "processing_status": "PROCESSING", "indexing_status": "PROCESSING", "updated_at": datetime.utcnow(), **metadata}},
-        )
+        metadata = {}
+        if not extraction_reusable:
+            content, metadata = extract_content(resource["file"], resource["extension"])
+            if not content.strip() and resource["extension"] not in {".png", ".jpg", ".jpeg", ".webp"}:
+                raise ValueError("No extractable text found")
+            mongo_db.resources.update_one(
+                {"_id": resource["_id"]},
+                {"$set": {
+                    "content": content,
+                    "extraction_status": "READY",
+                    "processing_status": "PROCESSING",
+                    "indexing_status": "PROCESSING",
+                    "updated_at": datetime.utcnow(),
+                    **metadata,
+                }},
+            )
     except Exception as exc:
         logger.exception("Material extraction failed for %s", file_id)
         mongo_db.resources.update_one(
             {"_id": resource["_id"]},
-            {"$set": {"processing_status": "FAILED", "extraction_status": "FAILED", "indexing_status": "FAILED", "error_message": str(exc)[:1000], "updated_at": datetime.utcnow()}},
+            {
+                "$set": {
+                    "processing_status": "FAILED",
+                    "extraction_status": "FAILED",
+                    "indexing_status": "FAILED",
+                    "error_message": str(exc)[:1000],
+                    "updated_at": datetime.utcnow(),
+                },
+                "$unset": {"processing_lease_until": "", "processing_started_at": "", "active_content_key": ""},
+            },
         )
         return False
 
@@ -249,7 +278,10 @@ def prepare_resource(file_id: str):
         final_fields["indexing_error"] = "Semantic indexing unavailable; keyword search remains available."
     else:
         final_fields["indexing_error"] = None
-    mongo_db.resources.update_one({"_id": resource["_id"]}, {"$set": final_fields})
+    mongo_db.resources.update_one(
+        {"_id": resource["_id"]},
+        {"$set": final_fields, "$unset": {"processing_lease_until": "", "processing_started_at": ""}},
+    )
     clear_search_cache()
     return True
 

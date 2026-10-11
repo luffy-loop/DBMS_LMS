@@ -8,6 +8,8 @@ type Course = { id:number; title:string; description:string; teacher_id:number }
 type Overview = { courses:number; assessments:number; course_pdfs:number; submissions:number; pending_grading:number }
 const ACCEPT = ".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.png,.jpg,.jpeg,.webp,.csv,.xlsx"
 const MAX_FILES = 20
+const MAX_UPLOAD_MB = 10
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 export default function TeacherDashboard() {
   const navigate = useNavigate()
@@ -22,6 +24,7 @@ export default function TeacherDashboard() {
   const [progress,setProgress] = useState<Record<string,number>>({})
   const [statuses,setStatuses] = useState<Record<string,string>>({})
   const [resourceIds,setResourceIds] = useState<Record<string,string>>({})
+  const [idempotencyKeys,setIdempotencyKeys] = useState<Record<string,string>>({})
   const [errors,setErrors] = useState<Record<string,string>>({})
   const [courseBusy,setCourseBusy] = useState(false)
   const [uploadBusy,setUploadBusy] = useState(false)
@@ -66,15 +69,29 @@ export default function TeacherDashboard() {
 
   function addFiles(list:FileList|null) {
     if (!list) return
-    const next = Array.from(list)
+    const selected = Array.from(list)
+    const oversized = selected.filter(file => file.size > MAX_UPLOAD_BYTES)
+    if (oversized.length) {
+      setError(oversized.map(file => file.name).join(", ") + ` exceed the ${MAX_UPLOAD_MB} MB per-file limit.`)
+    } else {
+      setError("")
+    }
+    const next = selected.filter(file => file.size <= MAX_UPLOAD_BYTES)
     setFiles(current => {
-      const merged = [...current, ...next]
-      const seen = new Set<string>()
-      return merged.filter(file => {
-        const key = file.name + ":" + file.size + ":" + file.lastModified
-        if (seen.has(key)) return false
-        seen.add(key); return true
-      }).slice(0, MAX_FILES)
+      const existingNames = new Set(current.map(file => file.name))
+      const merged = [...current, ...next.filter(file => !existingNames.has(file.name))]
+      return merged.slice(0, MAX_FILES)
+    })
+    setIdempotencyKeys(current => {
+      const updated = {...current}
+      for (const file of next) {
+        if (!updated[file.name]) {
+          updated[file.name] = typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.size}`
+        }
+      }
+      return updated
     })
   }
 
@@ -82,6 +99,7 @@ export default function TeacherDashboard() {
     setFiles(current => current.filter(file => file.name !== name))
     setProgress(current => { const next={...current}; delete next[name]; return next })
     setResourceIds(current => { const next={...current}; delete next[name]; return next })
+    setIdempotencyKeys(current => { const next={...current}; delete next[name]; return next })
     setStatuses(current => { const next={...current}; delete next[name]; return next })
     setErrors(current => { const next={...current}; delete next[name]; return next })
   }
@@ -96,6 +114,18 @@ export default function TeacherDashboard() {
     try {
       for (const file of pending) {
         const existingId = resourceIds[file.name]
+        if (existingId && statuses[file.name] === "FAILED") {
+          try {
+            await apiJson("/resources/" + existingId + "/retry", {method:"POST",signal:controller.signal}, 15000)
+            setStatuses(current => ({...current,[file.name]:"PROCESSING"}))
+            const status = await waitForReady(existingId, file.name, controller.signal)
+            if (status !== "READY") allReady = false
+          } catch (e) {
+            allReady = false
+            setErrors(current => ({...current,[file.name]:e instanceof Error ? e.message : "Unable to retry processing"}))
+          }
+          continue
+        }
         if (statuses[file.name] === "TIMEOUT" && existingId) {
           const status = await waitForReady(existingId, file.name, controller.signal)
           if (status !== "READY") allReady = false
@@ -105,10 +135,10 @@ export default function TeacherDashboard() {
         setErrors(current => ({...current,[file.name]:""}))
         setProgress(current => ({...current,[file.name]:0}))
         try {
-          const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})), controller.signal)
+          const result = await uploadFile("/courses/" + courseId + "/resources/batch", file, {titles:file.name.replace(/\.[^.]+$/,"")}, value => setProgress(current => ({...current,[file.name]:value})), controller.signal, idempotencyKeys[file.name])
           const first = (result as {files?:Array<{id?:string;status:string;error?:string}>}).files?.[0]
+          if (first?.id) setResourceIds(current => ({...current,[file.name]:first.id!}))
           if (!first || first.status === "FAILED") throw new Error(first?.error || "Upload failed")
-          if (first.id) setResourceIds(current => ({...current,[file.name]:first.id!}))
           if (first.status === "READY") {
             setStatuses(current => ({...current,[file.name]:"READY"}))
             setProgress(current => ({...current,[file.name]:100}))
@@ -237,7 +267,7 @@ export default function TeacherDashboard() {
               <input type="file" multiple accept={ACCEPT} disabled={uploadBusy} className="sr-only" onChange={e=>addFiles(e.target.files)} />
               <Upload className="mx-auto text-violet-300" size={28}/>
               <p className="mt-3 text-sm font-medium">Choose multiple files</p>
-              <p className="mt-1 text-xs text-white/35">PDF, DOCX, DOC, PPTX, PPT, TXT, MD, PNG, JPG, JPEG, WEBP, CSV, XLSX · max {MAX_FILES} files · {10} MB/file</p>
+              <p className="mt-1 text-xs text-white/35">PDF, DOCX, DOC, PPTX, PPT, TXT, MD, PNG, JPG, JPEG, WEBP, CSV, XLSX · max {MAX_FILES} files · {MAX_UPLOAD_MB} MB/file</p>
             </label>
             <div className="rounded-xl border border-white/10 bg-white/[.02] p-3 text-xs text-white/45">Selected course: <span className="text-white/75">{selectedCourse?.title || "None"}</span></div>
             {files.length > 0 && <div className="space-y-2">

@@ -83,6 +83,39 @@ def test_semantic_index_failure_keeps_extracted_resource_searchable(monkeypatch)
     assert not any(update.get("processing_status") == "FAILED" for update in fake_resources.updates)
 
 
+def test_index_retry_reuses_saved_extracted_content(monkeypatch):
+    resource_id = ObjectId("64b000000000000000000003")
+    resource = {
+        "_id": resource_id,
+        "file": b"original bytes",
+        "extension": ".txt",
+        "course_id": 4,
+        "filename": "lesson.txt",
+        "title": "Lesson",
+        "content": "Previously extracted lesson content",
+        "extraction_status": "READY",
+        "processing_status": "READY",
+        "indexing_status": "LEXICAL_ONLY",
+    }
+    fake_resources = FakeResources(resource)
+    monkeypatch.setattr(materials.mongo_db, "resources", fake_resources)
+    monkeypatch.setattr(
+        materials,
+        "extract_content",
+        lambda data, suffix: (_ for _ in ()).throw(AssertionError("extraction must not run during an indexing retry")),
+    )
+    indexed_items = []
+    monkeypatch.setattr(materials, "index_resource", lambda item: indexed_items.append(item) or True)
+    monkeypatch.setattr(materials, "clear_search_cache", lambda: None)
+
+    assert materials.prepare_resource(str(resource_id)) is True
+    assert indexed_items[0]["content"] == "Previously extracted lesson content"
+    final = fake_resources.updates[-1]
+    assert final["processing_status"] == "READY"
+    assert final["extraction_status"] == "READY"
+    assert final["indexing_status"] == "READY"
+
+
 def test_extraction_failure_is_still_reported_as_failed(monkeypatch):
     resource_id = ObjectId("64b000000000000000000002")
     resource = {
