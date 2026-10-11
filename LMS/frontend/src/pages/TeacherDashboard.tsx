@@ -52,8 +52,8 @@ export default function TeacherDashboard() {
     load()
   }, [navigate])
 
-  // Hide the eight pre-existing courses; newly created courses receive higher IDs and remain visible.
-  const visibleCourses = useMemo(() => courses.filter(course => course.id > 8), [courses])
+  // Course IDs are database identifiers, not visibility flags.
+  const visibleCourses = useMemo(() => courses, [courses])
   const selectedCourse = useMemo(() => visibleCourses.find(c => String(c.id) === courseId), [visibleCourses, courseId])
 
   async function createCourse(event:React.FormEvent) {

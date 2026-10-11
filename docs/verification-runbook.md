@@ -54,3 +54,12 @@ Use a dedicated test teacher/student in a non-production test course:
 6. Force a processing failure in a test environment and confirm retry behavior.
 
 **Do not say live upload/download or browser end-to-end verification passed unless these manual steps were actually performed.**
+
+
+## Durable worker deployment
+
+Quiz jobs are committed to PostgreSQL before the API returns and are processed by the separate `worker.py` process. Material files and processing states are persisted in MongoDB; the worker polls uploaded records and uses atomic leases so multiple workers cannot process the same resource concurrently. Stale quiz jobs are requeued with bounded retry attempts. Docker Compose includes the worker service. In production, deploy `python worker.py` as a separate long-running worker using the same database environment; an API-only Render service does not start it automatically.
+
+## Semantic search evaluation on approved course material
+
+The default CI check is a synthetic lexical regression check, not proof of semantic retrieval quality. Use the opt-in `tests/performance/search_corpus_evaluation.py` harness with a small, approved corpus exported to JSON. It reports lexical ranking and, when the embedding model is available, dense cosine ranking against instructor-labelled relevant titles. Do not include student data, credentials, or confidential materials in the fixture. Keep production vector search disabled on low-memory instances until cold-start, memory and authorization behavior have been measured.

@@ -35,6 +35,8 @@ jobs:
         run: pytest -q -s --junitxml=verification-results/backend-tests.xml
       - name: Evaluate fixed academic queries against known relevant materials
         run: python tests/performance/search_evaluation.py --output verification-results/search-evaluation.json
+      - name: Test worker recovery and search scope
+        run: pytest -q tests/test_worker.py tests/test_search_evaluation.py
       - name: Measure live Render health endpoint (30 requests, concurrency 3)
         run: python tests/performance/benchmark.py --base-url https://dbms-lms-hwvp.onrender.com --path /health --requests 30 --concurrency 3 --timeout 20 --output verification-results/live-health-benchmark.json
       - name: Measure isolated login latency

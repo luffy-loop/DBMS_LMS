@@ -5,7 +5,6 @@ import AppLayout from "../components/AppLayout"
 import { apiJson } from "../api"
 
 type Course = { id: number; title: string; description: string | null; teacher_id?: number }
-const LEGACY_COURSE_ID_CUTOFF = 8
 
 export default function Courses() {
   const navigate = useNavigate()
@@ -27,8 +26,8 @@ export default function Courses() {
       ])
       setEnrolledIds(new Set(myCourses.map(course => course.id)))
       const visible = role === "teacher"
-        ? myCourses.filter(course => course.id > LEGACY_COURSE_ID_CUTOFF)
-        : allCourses.filter(course => course.id > LEGACY_COURSE_ID_CUTOFF)
+        ? myCourses
+        : allCourses
       setCourses(visible)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load courses")
@@ -77,7 +76,7 @@ export default function Courses() {
                 {role === "student" ? "Available Courses" : "My Courses"}
               </h2>
               <p className="mt-1 text-sm text-white/45">
-                Browse newly created courses and open a course to start learning.
+                Browse available courses and open a course to start learning.
               </p>
             </div>
             <button onClick={() => void load()} disabled={loading} className="lms-btn-secondary rounded-xl px-4 py-2.5 text-sm disabled:opacity-50">
@@ -132,9 +131,9 @@ export default function Courses() {
           ) : (
             <div className="lms-card mt-8 rounded-2xl p-8 text-center">
               <BookOpen size={28} className="mx-auto text-white/35" />
-              <h3 className="mt-4 font-semibold">No new courses available yet</h3>
+              <h3 className="mt-4 font-semibold">No courses available yet</h3>
               <p className="mt-2 text-sm text-white/45">
-                Courses created from this point onward will appear here. Existing course records have not been deleted.
+                Courses will appear here when they are available to your account.
               </p>
               {role === "teacher" && (
                 <button onClick={() => navigate("/teacher")} className="lms-btn-primary mt-5 rounded-xl px-4 py-3 text-sm">

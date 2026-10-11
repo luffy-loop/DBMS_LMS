@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from auth import get_user
 from database import get_db
 from models import AIJob, Assignment, AssessmentQuestion, AssessmentQuestionOption, Enrollment, Course
 from notification_service import notify_users
-from ai_jobs import create_job, run_quiz_job
+from ai_jobs import create_job
 
 router = APIRouter(prefix="/quiz", tags=["quiz"])
 
@@ -55,7 +55,7 @@ def _can_access_course(user, course_id, db):
 
 
 @router.post("/generate")
-def generate_quiz(data: QuizGenerateRequest, background_tasks: BackgroundTasks, user=Depends(get_user), db: Session = Depends(get_db)):
+def generate_quiz(data: QuizGenerateRequest, user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] not in {"student", "teacher", "admin"}:
         raise HTTPException(status_code=403, detail="Access denied")
     course = _can_access_course(user, data.course_id, db)
@@ -83,7 +83,7 @@ def generate_quiz(data: QuizGenerateRequest, background_tasks: BackgroundTasks, 
     if active_count >= 3:
         raise HTTPException(status_code=429, detail="Quiz generation is busy. Wait for an active job to finish before retrying.")
     job = create_job(db, user["id"], course.id, "quiz", {"query": "course material", "question_count": data.question_count})
-    background_tasks.add_task(run_quiz_job, job.id)
+    # The committed QUEUED row is consumed by the independent durable worker.
     return {"job_id": job.job_id, "status": job.status}
 
 
