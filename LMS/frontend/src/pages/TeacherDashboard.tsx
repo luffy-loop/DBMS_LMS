@@ -49,13 +49,16 @@ export default function TeacherDashboard() {
     load()
   }, [navigate])
 
-  const selectedCourse = useMemo(() => courses.find(c => String(c.id) === courseId), [courses, courseId])
+  // Hide the eight pre-existing courses; newly created courses receive higher IDs and remain visible.
+  const visibleCourses = useMemo(() => courses.filter(course => course.id > 8), [courses])
+  const selectedCourse = useMemo(() => visibleCourses.find(c => String(c.id) === courseId), [visibleCourses, courseId])
 
   async function createCourse(event:React.FormEvent) {
     event.preventDefault()
     setCourseBusy(true); setError(""); setMessage("")
     try {
-      await apiJson("/courses",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,description})},45000)
+      const created = await apiJson<{id:number}>("/courses",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title,description})},45000)
+      setCourseId(String(created.id))
       setTitle(""); setDescription(""); setShowCourse(false); setMessage("Course created successfully."); await load()
     } catch(e) { setError(e instanceof Error ? e.message : "Failed to create course") }
     finally { setCourseBusy(false) }
@@ -188,13 +191,13 @@ export default function TeacherDashboard() {
         <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div><p className="text-sm text-violet-300">Teaching workspace</p><h2 className="mt-1 text-2xl font-semibold">Courses and learning materials</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-white/40">Upload multiple formats in one flow. Processing and indexing continue after the upload returns.</p></div>
           <div className="flex flex-wrap gap-3">
-            <button onClick={() => {setShowUpload(true);setError("");setMessage("")}} disabled={!courses.length} className="lms-btn-secondary rounded-xl px-4 py-3 text-sm disabled:opacity-40"><Upload size={16}/>Upload materials</button>
+            <button onClick={() => {setShowUpload(true);setError("");setMessage("")}} disabled={!visibleCourses.length} className="lms-btn-secondary rounded-xl px-4 py-3 text-sm disabled:opacity-40"><Upload size={16}/>Upload materials</button>
             <button onClick={() => {setShowCourse(true);setError("");setMessage("")}} className="lms-btn-primary rounded-xl px-4 py-3 text-sm"><Plus size={16}/>Create course</button>
           </div>
         </div>
 
         <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {courses.map(course => (
+          {visibleCourses.map(course => (
             <CourseCard
               key={course.id}
               course={course}
@@ -204,7 +207,7 @@ export default function TeacherDashboard() {
               }}
             />
           ))}
-          {!courses.length && (
+          {!visibleCourses.length && (
             <div className="lms-empty rounded-2xl p-8 md:col-span-2 xl:col-span-3">
               <p className="font-medium">No courses yet</p>
               <p className="mt-2 text-sm text-white/40">Create your first course to get started.</p>
@@ -227,7 +230,7 @@ export default function TeacherDashboard() {
           <div className="space-y-5">
             <Field label="Course">
               <select value={courseId} disabled={uploadBusy} onChange={e=>setCourseId(e.target.value)} className="lms-input">
-                {courses.map(course=><option key={course.id} value={course.id}>{course.title}</option>)}
+                {visibleCourses.map(course=><option key={course.id} value={course.id}>{course.title}</option>)}
               </select>
             </Field>
             <label className="block cursor-pointer rounded-2xl border border-dashed border-white/15 bg-white/[.025] p-7 text-center hover:border-violet-400/30">
