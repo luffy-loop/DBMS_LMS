@@ -28,8 +28,14 @@ def _stop(*_args):
 
 
 def _recover_stale_ai_jobs():
-    """Requeue interrupted quiz jobs and stop retrying after a bounded count."""
+    """Requeue interrupted quiz jobs with a compare-and-set guard.
+
+    Multiple workers may inspect the same stale rows. The conditional UPDATE
+    ensures only one worker can transition a job that is still stale and
+    running; later workers cannot increment its retry counter a second time.
+    """
     db = SessionLocal()
+    recovered = 0
     try:
         cutoff = datetime.utcnow() - timedelta(seconds=AI_JOB_STALE_SECONDS)
         stale = db.query(AIJob).filter(
@@ -45,24 +51,48 @@ def _recover_stale_ai_jobs():
             attempts = int(payload.get("_worker_attempts", 0))
             now = datetime.utcnow()
             if attempts >= MAX_ATTEMPTS:
-                job.status = "FAILED"
-                job.error = json.dumps({"error": "WORKER_RETRY_LIMIT", "message": "The background task failed repeatedly. Please retry from the LMS."})
+                values = {
+                    "status": "FAILED",
+                    "error": json.dumps({
+                        "error": "WORKER_RETRY_LIMIT",
+                        "message": "The background task failed repeatedly. Please retry from the LMS.",
+                    }),
+                    "updated_at": now,
+                }
             else:
                 payload["_worker_attempts"] = attempts + 1
-                job.payload = json.dumps(payload)
-                job.status = "QUEUED"
-                job.error = json.dumps({"error": "WORKER_RECOVERED", "message": "An interrupted task was requeued for processing."})
-            job.updated_at = now
-        if stale:
+                values = {
+                    "payload": json.dumps(payload),
+                    "status": "QUEUED",
+                    "error": json.dumps({
+                        "error": "WORKER_RECOVERED",
+                        "message": "An interrupted task was requeued for processing.",
+                    }),
+                    "updated_at": now,
+                }
+
+            # Re-check status and staleness in the write itself. This closes
+            # the race where another worker has already recovered or claimed
+            # this row after our initial SELECT.
+            changed = db.query(AIJob).filter(
+                AIJob.id == job.id,
+                AIJob.job_type == "quiz",
+                AIJob.status.in_({"RETRIEVING", "GENERATING"}),
+                AIJob.updated_at < cutoff,
+            ).update(values, synchronize_session=False)
+            if changed:
+                recovered += 1
+        if recovered:
             db.commit()
-        return len(stale)
+        else:
+            db.rollback()
+        return recovered
     except Exception:
         db.rollback()
         logger.exception("Unable to recover stale AI jobs")
         return 0
     finally:
         db.close()
-
 
 def _claim_quiz_job():
     """Atomically claim one queued quiz job."""

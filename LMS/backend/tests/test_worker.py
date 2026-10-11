@@ -18,6 +18,16 @@ class FakeQuery:
     def all(self): return self.rows
     def with_for_update(self, **kwargs): return self
     def first(self): return self.rows[0] if self.rows else None
+    def update(self, values, synchronize_session=False):
+        changed = 0
+        for row in self.rows:
+            # Model the compare-and-set status guard used by the recovery UPDATE.
+            if row.status not in {"RETRIEVING", "GENERATING"}:
+                continue
+            for key, value in values.items():
+                setattr(row, key, value)
+            changed += 1
+        return changed
 
 
 class FakeSession:
@@ -29,7 +39,7 @@ class FakeSession:
 
 
 def test_stale_quiz_job_is_requeued_with_attempt_count(monkeypatch):
-    job = SimpleNamespace(job_type="quiz", status="RETRIEVING", updated_at=datetime.utcnow()-timedelta(hours=1), payload="{}", error=None)
+    job = SimpleNamespace(id=1, job_type="quiz", status="RETRIEVING", updated_at=datetime.utcnow()-timedelta(hours=1), payload="{}", error=None)
     session = FakeSession([job])
     monkeypatch.setattr(worker, "SessionLocal", lambda: session)
     assert worker._recover_stale_ai_jobs() == 1
@@ -39,7 +49,7 @@ def test_stale_quiz_job_is_requeued_with_attempt_count(monkeypatch):
 
 
 def test_stale_quiz_job_fails_after_retry_limit(monkeypatch):
-    job = SimpleNamespace(job_type="quiz", status="GENERATING", updated_at=datetime.utcnow()-timedelta(hours=1), payload=json.dumps({"_worker_attempts": worker.MAX_ATTEMPTS}), error=None)
+    job = SimpleNamespace(id=2, job_type="quiz", status="GENERATING", updated_at=datetime.utcnow()-timedelta(hours=1), payload=json.dumps({"_worker_attempts": worker.MAX_ATTEMPTS}), error=None)
     session = FakeSession([job])
     monkeypatch.setattr(worker, "SessionLocal", lambda: session)
     assert worker._recover_stale_ai_jobs() == 1
@@ -58,3 +68,26 @@ def test_run_once_dispatches_persisted_material_and_quiz_jobs(monkeypatch):
     monkeypatch.setattr(worker, "run_quiz_job", lambda value: calls.append(("quiz", value)))
     assert worker.run_once() is True
     assert calls == [("material", "material-1"), ("quiz", 42)]
+
+
+
+def test_stale_job_recovery_is_idempotent_after_first_worker_wins(monkeypatch):
+    job = SimpleNamespace(
+        id=7,
+        job_type="quiz",
+        status="RETRIEVING",
+        updated_at=datetime.utcnow() - timedelta(hours=1),
+        payload="{}",
+        error=None,
+    )
+    session = FakeSession([job])
+    monkeypatch.setattr(worker, "SessionLocal", lambda: session)
+
+    assert worker._recover_stale_ai_jobs() == 1
+    assert job.status == "QUEUED"
+    assert json.loads(job.payload)["_worker_attempts"] == 1
+
+    # A second worker may still have seen the stale row before the first
+    # committed, but its conditional UPDATE must not change a queued job.
+    assert worker._recover_stale_ai_jobs() == 0
+    assert json.loads(job.payload)["_worker_attempts"] == 1
