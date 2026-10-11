@@ -44,6 +44,15 @@ def calculate_short_answer_overlap(student_answer: str, reference_answer: str) -
     return max(scores, default=0.0)
 
 
+def should_short_circuit_answer(
+    word_count: int,
+    lexical_score: float,
+    contradiction_detected: bool,
+) -> bool:
+    """Avoid heavyweight inference for unrelated answers and concise contradictions."""
+    return float(lexical_score) < 0.15 or (word_count <= 30 and bool(contradiction_detected))
+
+
 def _optional_embedding(text_content: str):
     try:
         return es.generate_embedding(text_content)
@@ -380,7 +389,7 @@ def update_question(assignment_id: int, question_id: int, data: QuestionUpdate, 
             if not ref_ans or len(ref_ans.split()) < 2:
                 raise HTTPException(status_code=400, detail="Descriptive question requires a detailed reference answer")
             q.reference_answer = ref_ans
-            q.reference_embedding = es.generate_embedding(ref_ans)
+            q.reference_embedding = _optional_embedding(ref_ans)
 
         target_max = data.max_marks if data.max_marks is not None else q.max_marks
 
@@ -403,7 +412,7 @@ def update_question(assignment_id: int, question_id: int, data: QuestionUpdate, 
                 db.flush()
 
                 for idx, c in enumerate(data.rubric_criteria):
-                    crit_vec = es.generate_embedding(c.criterion_text.strip())
+                    crit_vec = _optional_embedding(c.criterion_text.strip())
                     rubric_row = AssessmentQuestionRubric(
                         question_id=q.id,
                         criterion_text=c.criterion_text.strip(),
@@ -1004,10 +1013,13 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
                 })
                 continue
 
-        # A very low lexical/alignment score with no contradiction is strong evidence
-        # that the answer is unrelated. Do not wait for heavyweight models just to fail
-        # on an obviously off-topic answer; record a reviewable zero instead.
-        if len(student_answer.split()) <= 30 and lexical_reference < 0.15 and not contradiction:
+        # A short answer with almost no concept overlap or an explicit contradiction
+        # can receive a reviewable zero suggestion without loading heavyweight models.
+        # This avoids long waits on cold model downloads for clearly incorrect answers.
+        if should_short_circuit_answer(
+            len(student_answer.split()), lexical_reference, contradiction
+        ):
+            contradictory = bool(contradiction)
             row.awarded_marks = 0.0
             row.similarity_score = None
             row.student_embedding = None
@@ -1016,14 +1028,33 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             row.evaluator_confidence = 0.55
             row.evaluated_at = get_now()
             row.review_status = "needs_review"
+            review_reason = (
+                "Possible contradiction detected; teacher confirmation required."
+                if contradictory
+                else "Very low concept overlap; teacher confirmation required."
+            )
+            feedback = (
+                "A possible contradiction with the reference answer was detected. "
+                "Suggested marks are 0, but teacher review is required before marks are finalized."
+                if contradictory
+                else
+                "Suggested marks are 0 because the answer appears unrelated to the reference. "
+                "Teacher review is required before marks are finalized."
+            )
             row.rubric_evaluation = json.dumps({
-                "summary": "The answer has no meaningful overlap with the reference answer.",
-                "feedback": "Suggested marks are 0 because the answer appears unrelated to the question. Teacher review is required before marks are finalized.",
+                "summary": (
+                    "A possible contradiction was detected in the concise answer."
+                    if contradictory
+                    else "The answer has no meaningful overlap with the reference answer."
+                ),
+                "feedback": feedback,
                 "matched_concepts": [],
                 "missing_concepts": [],
                 "criteria": [],
+                "contradiction_detected": contradictory,
+                "contradiction_details": contradiction_details if contradictory else [],
                 "scoring_method": "lexical-reference-sentence-v3-dsa",
-                "review_reason": "Very low concept overlap; manual confirmation required.",
+                "review_reason": review_reason,
             })
             continue
 
