@@ -26,3 +26,15 @@ def test_labelled_corpus_compares_lexical_and_reports_semantic_model_unavailabil
 def test_lexical_search_respects_explicit_course_fixture_filter():
     rows=_lexical_search("mutex semaphore", [CORPUS["documents"][1]])
     assert [row["title"] for row in rows]==["Process Synchronization"]
+
+
+def test_search_scoping_passes_only_authorized_course_ids(monkeypatch):
+    import vector_store
+    observed = []
+    monkeypatch.setattr(vector_store, "_resources", lambda ids: observed.append(ids) or CORPUS["documents"])
+    monkeypatch.setattr(vector_store, "_lexical_search", lambda query, rows: [{"title": "scoped"}])
+    vector_store.clear_search_cache()
+    results, _ = vector_store.search_resources_detailed("unique scoped query", [7])
+    assert results == [{"title": "scoped"}]
+    assert observed == [(7,)]
+    vector_store.clear_search_cache()

@@ -32,7 +32,12 @@ def _metrics(ranked, relevant):
 
 
 def evaluate(corpus, use_semantic=True):
-    documents = corpus["documents"]
+    documents = [
+        {"id": row.get("id", f"document-{index}"), "title": row["title"],
+         "content": row.get("content", ""), "type": row.get("type", "resource"),
+         "course_id": int(row.get("course_id", 0))}
+        for index, row in enumerate(corpus["documents"])
+    ]
     queries = corpus["queries"]
     lexical_rows = []
     semantic_rows = []
@@ -50,14 +55,19 @@ def evaluate(corpus, use_semantic=True):
         lexical_titles = [row["title"] for row in lexical]
         lexical_rows.append({"query":case["query"], **_metrics(lexical_titles,relevant), "ranked_titles":lexical_titles})
         if embedder:
-            query_vector = embedder(case["query"])
-            scored = []
-            for document in documents:
-                vector = embedder((document.get("title","") + ". " + document.get("content",""))[:2000])
-                scored.append((_cosine(query_vector,vector),document["title"]))
-            scored.sort(reverse=True)
-            titles = [title for _,title in scored]
-            semantic_rows.append({"query":case["query"], **_metrics(titles,relevant), "ranked_titles":titles})
+            try:
+                query_vector = embedder(case["query"])
+                scored = []
+                for document in documents:
+                    vector = embedder((document.get("title","") + ". " + document.get("content",""))[:2000])
+                    scored.append((_cosine(query_vector,vector),document["title"]))
+                scored.sort(reverse=True)
+                titles = [title for _,title in scored]
+                semantic_rows.append({"query":case["query"], **_metrics(titles,relevant), "ranked_titles":titles})
+            except Exception as exc:
+                semantic_error = type(exc).__name__
+                semantic_rows = []
+                embedder = None
     report = {
         "generated_at_utc":datetime.now(timezone.utc).isoformat(),
         "python":platform.python_version(),
@@ -65,7 +75,7 @@ def evaluate(corpus, use_semantic=True):
         "query_count":len(queries),
         "corpus_mode":"user_supplied_approved_course_material" if corpus.get("source") else "user_supplied_corpus",
         "lexical":{"hit_at_1":round(sum(row["hit_at_1"] for row in lexical_rows)/max(1,len(lexical_rows)),3),"mean_reciprocal_rank":round(statistics.mean(row["reciprocal_rank"] for row in lexical_rows),3) if lexical_rows else 0,"cases":lexical_rows},
-        "semantic":{"available":bool(embedder),"error_type":semantic_error,"hit_at_1":round(sum(row["hit_at_1"] for row in semantic_rows)/max(1,len(semantic_rows)),3) if semantic_rows else None,"mean_reciprocal_rank":round(statistics.mean(row["reciprocal_rank"] for row in semantic_rows),3) if semantic_rows else None,"cases":semantic_rows},
+        "semantic":{"available":bool(embedder and len(semantic_rows) == len(queries)),"error_type":semantic_error,"hit_at_1":round(sum(row["hit_at_1"] for row in semantic_rows)/max(1,len(semantic_rows)),3) if semantic_rows else None,"mean_reciprocal_rank":round(statistics.mean(row["reciprocal_rank"] for row in semantic_rows),3) if semantic_rows else None,"cases":semantic_rows},
         "limitations":["Results depend on the supplied relevance labels and corpus.","Embedding cosine evaluation is a model comparison, not proof that the production vector index is enabled.","Do not include private student records or confidential course material."],
     }
     return report

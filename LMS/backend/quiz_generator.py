@@ -62,7 +62,7 @@ def generate_quiz(data: QuizGenerateRequest, user=Depends(get_user), db: Session
     stale_before = datetime.utcnow() - timedelta(minutes=5)
     db.query(AIJob).filter(
         AIJob.job_type == "quiz",
-        AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"}),
+        AIJob.status.in_({"RETRIEVING", "GENERATING"}),
         AIJob.updated_at < stale_before,
     ).update(
         {
@@ -92,7 +92,7 @@ def quiz_job_status(job_id: str, user=Depends(get_user), db: Session = Depends(g
     job = db.query(AIJob).filter(AIJob.job_id == job_id, AIJob.user_id == user["id"], AIJob.job_type == "quiz").first()
     if not job:
         raise HTTPException(status_code=404, detail="Quiz job not found")
-    if job.status in {"QUEUED", "RETRIEVING", "GENERATING"} and job.updated_at < datetime.utcnow() - timedelta(minutes=5):
+    if job.status in {"RETRIEVING", "GENERATING"} and job.updated_at < datetime.utcnow() - timedelta(minutes=5):
         job.status = "FAILED"
         job.error = json.dumps({"error": "JOB_STALE", "message": "This job stopped updating. Retry generation; no duplicate active job will be created."})
         job.updated_at = datetime.utcnow()

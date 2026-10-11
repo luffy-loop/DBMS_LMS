@@ -86,11 +86,41 @@ def _claim_quiz_job():
         db.close()
 
 
-def _next_material_id():
-    """Find a persisted upload; _process_and_notify claims it with an atomic lease."""
+def _recover_stale_materials():
+    """Stop automatic retries after the configured limit for expired leases."""
     try:
+        cutoff = datetime.utcnow() - timedelta(seconds=max(60, int(os.getenv("RESOURCE_PROCESSING_LEASE_SECONDS", "600"))))
+        stale = mongo_db.resources.find({
+            "assignment_id": {"$exists": False},
+            "processing_status": "PROCESSING",
+            "processing_lease_until": {"$lt": cutoff},
+            "processing_attempts": {"$gte": MAX_ATTEMPTS},
+        }).limit(25)
+        for row in stale:
+            mongo_db.resources.update_one(
+                {"_id": row["_id"], "processing_status": "PROCESSING"},
+                {"$set": {"processing_status": "FAILED", "error_message": "Processing failed after the automatic retry limit.", "updated_at": datetime.utcnow()},
+                 "$unset": {"processing_lease_until": ""}},
+            )
+    except Exception:
+        logger.exception("Unable to enforce material retry limit")
+
+
+def _next_material_id():
+    """Find queued or expired work; the processor atomically claims its lease."""
+    try:
+        now = datetime.utcnow()
+        stale_before = now - timedelta(seconds=max(60, int(os.getenv("RESOURCE_PROCESSING_LEASE_SECONDS", "600"))))
         row = mongo_db.resources.find_one(
-            {"assignment_id": {"$exists": False}, "processing_status": "UPLOADED"},
+            {
+                "assignment_id": {"$exists": False},
+                "processing_attempts": {"$lt": MAX_ATTEMPTS},
+                "$or": [
+                    {"processing_status": "UPLOADED"},
+                    {"processing_status": "PROCESSING", "processing_lease_until": {"$lt": now}},
+                    {"processing_status": "PROCESSING", "processing_lease_until": {"$exists": False}, "updated_at": {"$lt": stale_before}},
+                ],
+            },
             {"_id": 1},
             sort=[("created_at", 1)],
         )
@@ -103,6 +133,7 @@ def _next_material_id():
 def run_once():
     did_work = False
     _recover_stale_ai_jobs()
+    _recover_stale_materials()
     material_id = _next_material_id()
     if material_id:
         did_work = True
