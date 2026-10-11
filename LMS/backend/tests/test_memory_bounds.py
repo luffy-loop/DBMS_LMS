@@ -31,7 +31,7 @@ def test_csv_extraction_is_bounded():
     data = ("a,b\n" + "long,value\n" * 10000).encode()
     result, _ = extract_content(data, ".csv")
     assert len(result) <= MAX_EXTRACTED_CHARS
-    assert result.startswith("a,b")
+    assert result.startswith("a | b")
 
 
 def test_vector_search_cache_limits_are_explicit():
