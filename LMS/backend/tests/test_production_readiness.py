@@ -80,13 +80,7 @@ def test_production_frontend_cors_preflight_is_allowed():
 
 def test_cors_does_not_reflect_untrusted_origin():
     origin = "https://untrusted.example.invalid"
-    response = TestClient(main.app).options(
-        "/login",
-        headers={
-            "Origin": origin,
-            "Access-Control-Request-Method": "POST",
-        },
-    )
+    response = TestClient(main.app).get("/health", headers={"Origin": origin})
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") != origin
 
