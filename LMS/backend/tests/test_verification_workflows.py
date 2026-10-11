@@ -468,10 +468,8 @@ def test_study_copilot_sources_include_supporting_evidence_and_page_references()
                    "[Page 4] A foreign key links records between related tables.",
     }
     answer = build_answer("Explain primary key database", [result])
-    assert answer["mode"] == "course materials"
-    assert answer["sources"]
-    source = answer["sources"][0]
-    assert source["title"] == "Database Notes"
+    assert answer["mode"] == "study knowledge + course context"
+    source = next(source for source in answer["sources"] if source["title"] == "Database Notes")
     assert source["course_id"] == 101
     assert source["page_references"] == [3, 4]
     assert source["evidence"]
