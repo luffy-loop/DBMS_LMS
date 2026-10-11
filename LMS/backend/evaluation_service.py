@@ -528,7 +528,7 @@ def calculate_edit_distance_score(student_answer: str, reference_answer: str) ->
         if key in typo_cache:
             return typo_cache[key]
 
-        # Banded Levenshtein distance: only near-identical tokens (at most one
+        # Bounded Levenshtein distance: only near-identical tokens (at most one
         # edit) qualify, avoiding broad fuzzy matches between different concepts.
         previous = list(range(len(b) + 1))
         for i, char_a in enumerate(a, 1):
