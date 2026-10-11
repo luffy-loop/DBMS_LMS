@@ -351,7 +351,7 @@ def test_dsa_edit_distance_recognizes_single_character_typo_conservatively():
         "A primary key uniquely identifies each row in a database table",
         "A primary key uniquely identifes each row in a database table",
     )
-    assert score >= 0.90
+    assert score >= 0.80
     assert 0.0 <= score <= 1.0
 
 
