@@ -5,6 +5,7 @@ os.environ["RUN_DB_SETUP"] = "false"
 import asyncio
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -37,7 +38,7 @@ def install_student_db():
     return engine, db
 
 def token(role):
-    return jwt.encode({"id": 7, "role": role}, key, algorithm=alg)
+    return jwt.encode({"id": 7, "role": role, "exp": int(time.time()) + 300}, key, algorithm=alg)
 
 
 def test_expired_token_is_rejected():
