@@ -892,8 +892,22 @@ def correct_submission_with_ai(submission_id: int, user=Depends(get_user), db: S
             "message": "Saved AI suggestions loaded. Teacher review and publication are still required.",
         }
 
+    # AI must not replace a finalized submission total or published result.
+    if submission.marks_published or (
+        submission.marks is not None and submission.graded_at is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Teacher-finalized marks cannot be re-evaluated by AI. Use the teacher review workflow to change final marks.",
+        )
+
     failures = []
     for row in records:
+        # During partial review, preserve each teacher-reviewed question while
+        # allowing AI suggestions to be generated for the remaining questions.
+        if row.review_status in {"reviewed", "published"}:
+            continue
+
         question = questions.get(row.question_id)
         if question is None:
             row.evaluation_status = "evaluation_failed"

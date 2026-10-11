@@ -188,3 +188,24 @@ def test_missing_embedding_model_does_not_block_question_setup(monkeypatch):
         lambda text: (_ for _ in ()).throw(RuntimeError("model unavailable")),
     )
     assert ee._optional_embedding("A valid reference answer") is None
+
+
+
+def test_ai_re_evaluation_protects_teacher_finalized_marks_and_reviewed_questions():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1].joinpath("exam_evaluation.py").read_text(encoding="utf-8")
+    endpoint = source.split(
+        '@router.post("/submissions/{submission_id}/correct-with-ai")', 1
+    )[1].split('@router.get("/submissions/{submission_id}/evaluation")', 1)[0]
+
+    finalized_guard = endpoint.split("    failures = []", 1)[0]
+    assert "submission.marks_published" in finalized_guard
+    assert "submission.marks is not None and submission.graded_at is not None" in finalized_guard
+    assert "status_code=409" in finalized_guard
+
+    reviewed_guard = endpoint.split("for row in records:", 1)[1].split(
+        "question = questions.get(row.question_id)", 1
+    )[0]
+    assert 'if row.review_status in {"reviewed", "published"}:' in reviewed_guard
+    assert "continue" in reviewed_guard
