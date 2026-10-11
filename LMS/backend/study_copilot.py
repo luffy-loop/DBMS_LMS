@@ -46,6 +46,26 @@ def _sentence_parts(text):
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if len(s.split()) >= 6]
 
 
+def _source_payload(result, snippets=None):
+    """Return compact, verifiable source metadata for a course-material result."""
+    content = str(result.get("content") or "")
+    page_references = sorted({
+        int(number)
+        for number in re.findall(r"\[(?:Page|Slide)\s+(\d+)\]", content, flags=re.IGNORECASE)
+    })
+    source = {
+        "title": result.get("title", "Course material"),
+        "type": result.get("type", "resource"),
+        "course_id": int(result.get("course_id") or 0),
+        "distance": result.get("distance"),
+    }
+    if page_references:
+        source["page_references"] = page_references
+    if snippets:
+        source["evidence"] = [str(snippet)[:700] for snippet in snippets[:2] if snippet]
+    return source
+
+
 def _retrieval_answer(question, results):
     words = set(re.findall(r"[a-zA-Z]{3,}", question.lower()))
     ranked = []
@@ -109,7 +129,7 @@ def build_answer(question, results):
         "answer": answer,
         "confidence": "high" if len(useful) >= 2 else "medium",
         "mode": "course materials",
-        "sources": [{"title": r["title"], "type": r["type"], "course_id": r["course_id"], "distance": r["distance"]} for r in useful[:4]],
+        "sources": [_source_payload(r, r.get("snippets")) for r in useful[:4]],
     }
 
 
