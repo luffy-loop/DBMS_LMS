@@ -241,6 +241,7 @@ def prepare_resource(file_id: str):
 
     final_fields = {
         "processing_status": "READY",
+        "extraction_status": "READY",
         "indexing_status": "READY" if indexed else "LEXICAL_ONLY",
         "updated_at": datetime.utcnow(),
     }
