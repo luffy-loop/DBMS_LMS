@@ -96,7 +96,7 @@ class AdminUserCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     roll_no: str = Field(min_length=3, max_length=100)
     password: str = Field(min_length=8, max_length=128)
-    role: Literal["student", "teacher"]
+    role: Literal["student", "teacher", "admin"]
     section: str = Field(default="Unassigned", min_length=1, max_length=40)
 
 
