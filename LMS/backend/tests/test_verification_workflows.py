@@ -277,6 +277,46 @@ def test_material_upload_idempotency_processing_listing_download_and_authorizati
         close_database(engine, db, tables)
 
 
+
+def test_upload_rejects_wrong_owner_bad_signature_and_invalid_idempotency_key(monkeypatch):
+    engine, db, tables, _ = install_database(monkeypatch)
+    try:
+        client = TestClient(main.app)
+        teacher = headers(11, "teacher")
+        other_teacher = headers(14, "teacher")
+
+        # A teacher cannot upload to a course owned by another teacher.
+        forbidden_course = client.post(
+            "/courses/101/resources",
+            headers=other_teacher,
+            data={"title": "Unauthorized"},
+            files={"file": ("note.txt", b"not allowed", "text/plain")},
+        )
+        assert forbidden_course.status_code == 404
+
+        # Extension alone is not sufficient: reject a PDF without a PDF signature.
+        malformed = client.post(
+            "/courses/101/resources",
+            headers=teacher,
+            data={"title": "Malformed PDF"},
+            files={"file": ("malformed.pdf", b"this is not a PDF", "application/pdf")},
+        )
+        assert malformed.status_code == 400
+        assert "Invalid PDF signature" in malformed.text
+
+        invalid_key = client.post(
+            "/courses/101/resources",
+            headers={**teacher, "Idempotency-Key": "bad key with spaces"},
+            data={"title": "Invalid key"},
+            files={"file": ("note.txt", b"safe text", "text/plain")},
+        )
+        assert invalid_key.status_code == 400
+        assert "Invalid Idempotency-Key" in invalid_key.text
+    finally:
+        close_database(engine, db, tables)
+
+
+
 def test_assignment_submission_grading_publication_and_student_feedback_visibility(monkeypatch):
     engine, db, tables, _ = install_database(monkeypatch)
     try:
