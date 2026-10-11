@@ -292,20 +292,20 @@ def test_pdf_docx_and_pptx_uploads_extract_and_download_over_http(monkeypatch):
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\\nstream\\n" + stream + b"\\nendstream",
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
         ]
-        output = bytearray(b"%PDF-1.4\\n")
+        output = bytearray(b"%PDF-1.4\n")
         offsets = [0]
         for number, obj in enumerate(objects, 1):
             offsets.append(len(output))
-            output.extend(f"{number} 0 obj\\n".encode("ascii") + obj + b"\\nendobj\\n")
+            output.extend(f"{number} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
         xref = len(output)
-        output.extend(f"xref\\n0 {len(objects) + 1}\\n".encode("ascii"))
-        output.extend(b"0000000000 65535 f \\n")
+        output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        output.extend(b"0000000000 65535 f \n")
         for offset in offsets[1:]:
-            output.extend(f"{offset:010d} 00000 n \\n".encode("ascii"))
+            output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
         output.extend(
-            f"trailer\\n<< /Size {len(objects) + 1} /Root 1 0 R >>\\nstartxref\\n{xref}\\n%%EOF\\n".encode("ascii")
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
         )
         return bytes(output)
 
