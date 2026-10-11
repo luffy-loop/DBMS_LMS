@@ -482,6 +482,90 @@ def calculate_sequence_alignment_score(student_answer: str, reference_answer: st
         return 0.0
     return round(2 * precision * recall / (precision + recall), 4)
 
+
+def calculate_edit_distance_score(student_answer: str, reference_answer: str) -> float:
+    """Bounded token edit-similarity signal for spelling variants and near-miss wording.
+
+    This is supplementary evidence, not semantic understanding. It uses the existing
+    phrase normalization/synonym groups, and allows conservative character-level
+    matching for longer tokens. Inputs are capped to keep worst-case work bounded.
+    """
+    def normalize(value: str) -> list[str]:
+        text = (value or "").lower()
+        phrases = [
+            (r"\\bwait(?:ing)?\\s+(?:for|on)\\s+each other\\s+(?:forever|indefinitely)\\b", "wait indefinitely for resources held by one another"),
+            (r"\\bwait(?:ing)?\\s+(?:for|on)\\s+one another\\s+(?:forever|indefinitely)\\b", "wait indefinitely for resources held by one another"),
+            (r"\\b(?:none of them can continue|none can continue|cannot continue|can't continue|unable to continue|cannot proceed|can't proceed)\\b", "preventing further execution"),
+            (r"\\b(?:preventing|prevents|prevent)\\s+(?:any\\s+)?further execution\\b", "preventing further execution"),
+            (r"\\b(?:wait forever|wait endlessly)\\b", "wait indefinitely"),
+            (r"\\b(?:each other|one another)\\b", "one another"),
+        ]
+        for pattern, replacement in phrases:
+            text = re.sub(pattern, replacement, text)
+        words = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)?", text)
+        return [w[:32] for w in words if w not in STOPWORDS and len(w) >= 2][:120]
+
+    student = normalize(student_answer)
+    reference = normalize(reference_answer)
+    if not student or not reference:
+        return 0.0
+
+    groups = [set([key, *values]) for key, values in SYNONYMS.items()]
+
+    def equivalent(a: str, b: str) -> bool:
+        if a == b:
+            return True
+        return any(a in group and b in group for group in groups)
+
+    typo_cache: dict[tuple[str, str], bool] = {}
+
+    def typo_equivalent(a: str, b: str) -> bool:
+        if equivalent(a, b):
+            return True
+        if len(a) < 4 or len(b) < 4 or abs(len(a) - len(b)) > 1:
+            return False
+        key = (a, b) if a <= b else (b, a)
+        if key in typo_cache:
+            return typo_cache[key]
+
+        # Banded Levenshtein distance: only near-identical tokens (at most one
+        # edit) qualify, avoiding broad fuzzy matches between different concepts.
+        previous = list(range(len(b) + 1))
+        for i, char_a in enumerate(a, 1):
+            current = [i] + [0] * len(b)
+            row_min = current[0]
+            for j, char_b in enumerate(b, 1):
+                current[j] = min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + (char_a != char_b),
+                )
+                row_min = min(row_min, current[j])
+            if row_min > 1:
+                typo_cache[key] = False
+                return False
+            previous = current
+        result = previous[-1] <= 1
+        typo_cache[key] = result
+        return result
+
+    rows, cols = len(reference) + 1, len(student) + 1
+    previous = list(range(cols))
+    for i in range(1, rows):
+        current = [i] + [0] * (cols - 1)
+        for j in range(1, cols):
+            substitution_cost = 0 if typo_equivalent(reference[i - 1], student[j - 1]) else 1
+            current[j] = min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + substitution_cost,
+            )
+        previous = current
+
+    distance = previous[-1]
+    return round(max(0.0, min(1.0, 1.0 - distance / max(len(reference), len(student)))), 4)
+
+
 def get_crit_matches(crit_words: list[str], clean_ans: str) -> list[str]:
     stu_tokens = set(re.findall(r"[a-z0-9\-]+", clean_ans.lower()))
     matches = []
