@@ -104,11 +104,15 @@ def _looks_academic_question(question):
 def build_answer(question, results):
     knowledge = find_knowledge(question)
     if knowledge:
+        _, evidence_results = _retrieval_answer(question, results) if results else ("", [])
         return {
             "answer": knowledge["answer"],
             "confidence": "high",
             "mode": "general study knowledge" if not results else "study knowledge + course context",
-            "sources": [{"title": knowledge["topic"], "type": "general study knowledge", "course_id": 0, "distance": 0}] + [{"title": r["title"], "type": r["type"], "course_id": r["course_id"], "distance": r["distance"]} for r in results[:3]],
+            "sources": [{"title": knowledge["topic"], "type": "general study knowledge", "course_id": 0, "distance": 0}] + [
+                _source_payload(result, result.get("snippets"))
+                for result in evidence_results[:3]
+            ],
         }
     if not results:
         if not _looks_academic_question(question):
