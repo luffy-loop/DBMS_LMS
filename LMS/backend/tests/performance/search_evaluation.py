@@ -6,6 +6,7 @@ semantic-embedding quality claim.
 """
 import argparse
 import json
+import os
 import platform
 import statistics
 from datetime import datetime, timezone
