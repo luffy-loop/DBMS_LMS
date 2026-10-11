@@ -493,12 +493,12 @@ def calculate_edit_distance_score(student_answer: str, reference_answer: str) ->
     def normalize(value: str) -> list[str]:
         text = (value or "").lower()
         phrases = [
-            (r"\\bwait(?:ing)?\\s+(?:for|on)\\s+each other\\s+(?:forever|indefinitely)\\b", "wait indefinitely for resources held by one another"),
-            (r"\\bwait(?:ing)?\\s+(?:for|on)\\s+one another\\s+(?:forever|indefinitely)\\b", "wait indefinitely for resources held by one another"),
-            (r"\\b(?:none of them can continue|none can continue|cannot continue|can't continue|unable to continue|cannot proceed|can't proceed)\\b", "preventing further execution"),
-            (r"\\b(?:preventing|prevents|prevent)\\s+(?:any\\s+)?further execution\\b", "preventing further execution"),
-            (r"\\b(?:wait forever|wait endlessly)\\b", "wait indefinitely"),
-            (r"\\b(?:each other|one another)\\b", "one another"),
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+each other\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\bwait(?:ing)?\s+(?:for|on)\s+one another\s+(?:forever|indefinitely)\b", "wait indefinitely for resources held by one another"),
+            (r"\b(?:none of them can continue|none can continue|cannot continue|can't continue|unable to continue|cannot proceed|can't proceed)\b", "preventing further execution"),
+            (r"\b(?:preventing|prevents|prevent)\s+(?:any\s+)?further execution\b", "preventing further execution"),
+            (r"\b(?:wait forever|wait endlessly)\b", "wait indefinitely"),
+            (r"\b(?:each other|one another)\b", "one another"),
         ]
         for pattern, replacement in phrases:
             text = re.sub(pattern, replacement, text)
