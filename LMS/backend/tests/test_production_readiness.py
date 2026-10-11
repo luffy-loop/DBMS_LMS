@@ -77,6 +77,21 @@ def test_production_frontend_cors_preflight_is_allowed():
     assert response.headers.get("access-control-allow-origin") == origin
 
 
+
+def test_cors_does_not_reflect_untrusted_origin():
+    origin = "https://untrusted.example.invalid"
+    response = TestClient(main.app).options(
+        "/login",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") != origin
+
+
+
 def test_readiness_requires_both_postgres_and_mongodb(monkeypatch):
     class Connection:
         def __enter__(self):
