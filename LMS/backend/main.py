@@ -1546,7 +1546,13 @@ def get_submissions(pending_only: bool = False, user=Depends(get_user), db: Sess
     return build_submission_payloads(subs, db)
 
 @app.put("/submissions/{submission_id}/marks")
-def give_marks(submission_id: int, marks: float, user=Depends(get_user), db: Session = Depends(get_db)):
+def give_marks(
+    submission_id: int,
+    marks: float,
+    user=Depends(get_user),
+    db: Session = Depends(get_db),
+    feedback: str | None = None,
+):
     if user["role"] != "teacher":
         raise HTTPException(status_code=403, detail="Teacher access only")
     submission = db.query(Submission).filter(Submission.id == submission_id).with_for_update().first()
@@ -1561,6 +1567,11 @@ def give_marks(submission_id: int, marks: float, user=Depends(get_user), db: Ses
     if marks < 0 or marks > maximum:
         raise HTTPException(status_code=400, detail=f"Marks must be between 0 and the maximum ({maximum})")
     submission.marks = round(float(marks), 2)
+    if feedback is not None:
+        clean_feedback = feedback.strip()
+        if len(clean_feedback) > 2000:
+            raise HTTPException(status_code=400, detail="Feedback must be 2,000 characters or fewer")
+        submission.teacher_review_note = clean_feedback or None
     submission.marks_published = False
     submission.graded_by = user["id"]
     submission.graded_at = get_now()
@@ -1602,6 +1613,7 @@ def my_marks(user=Depends(get_user), db: Session = Depends(get_db)):
     for item, submission in zip(results, subs):
         if not submission.marks_published:
             item["marks"] = None
+            item["teacher_review_note"] = None
             item["marks_status"] = "awaiting_publication" if submission.marks is not None else "awaiting_grading"
         else:
             item["marks_status"] = "published"

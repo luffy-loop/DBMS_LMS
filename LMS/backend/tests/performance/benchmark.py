@@ -2,8 +2,11 @@
 import argparse
 import concurrent.futures
 import json
+import platform
 import statistics
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -51,6 +54,7 @@ def main():
     parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--token", default="")
+    parser.add_argument("--output", default="", help="Optional path to save the measured JSON report")
     args = parser.parse_args()
     if args.requests < 1 or args.concurrency < 1:
         parser.error("--requests and --concurrency must be positive")
@@ -66,13 +70,25 @@ def main():
     latencies = [latency for _, latency in results]
     successful = sum(200 <= status < 400 for status, _ in results)
     failed = len(results) - successful
-    print(json.dumps({
+    status_counts = {}
+    for status, _ in results:
+        label = str(status) if status else "transport_error"
+        status_counts[label] = status_counts.get(label, 0) + 1
+    report = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "environment": {
+            "runtime": platform.python_version(),
+            "platform": platform.platform(),
+            "host": __import__("urllib.parse", fromlist=["urlparse"]).urlparse(args.base_url).hostname,
+        },
         "base_url": args.base_url,
         "endpoints": args.path,
         "method": args.method,
+        "authenticated": bool(args.token),
         "requests": len(results),
         "successful": successful,
         "failed": failed,
+        "status_counts": status_counts,
         "error_rate_percent": round((failed / len(results)) * 100, 2),
         "average_latency_ms": round(statistics.mean(latencies), 2) if latencies else None,
         "min_latency_ms": round(min(latencies), 2) if latencies else None,
@@ -82,7 +98,14 @@ def main():
         "requests_per_second": round(len(results) / elapsed, 2) if elapsed else None,
         "concurrency": args.concurrency,
         "duration_seconds": round(elapsed, 3),
-    }, indent=2))
+        "notes": "Measured HTTP requests; success is a 2xx/3xx response. Health-only runs do not verify authenticated workflows.",
+    }
+    rendered = json.dumps(report, indent=2, sort_keys=True)
+    print(rendered)
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

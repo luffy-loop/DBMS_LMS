@@ -29,10 +29,24 @@ jobs:
         run: pip install -r requirements.txt
       - name: Compile backend
         run: python -m compileall -q .
-      - name: Run backend tests
-        run: pytest -q
+      - name: Prepare verification report directory
+        run: mkdir -p verification-results
+      - name: Run backend tests and record expected-versus-actual HTTP assertions
+        run: pytest -q -s --junitxml=verification-results/backend-tests.xml
+      - name: Evaluate fixed academic queries against known relevant materials
+        run: python tests/performance/search_evaluation.py --output verification-results/search-evaluation.json
+      - name: Measure live Render health endpoint (30 requests, concurrency 3)
+        run: python tests/performance/benchmark.py --base-url https://dbms-lms-hwvp.onrender.com --path /health --requests 30 --concurrency 3 --timeout 20 --output verification-results/live-health-benchmark.json
       - name: Measure isolated login latency
         run: python tests/performance/benchmark_login.py
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lms-verification-results-${{ github.run_number }}
+          path: LMS/backend/verification-results/*
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     runs-on: ubuntu-latest
