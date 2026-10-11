@@ -99,38 +99,63 @@ def extract_content(data:bytes,suffix:str)->tuple[str,dict]:
         from docx import Document
         doc=Document(io.BytesIO(data))
         def parts():
+            size=0
             for paragraph in doc.paragraphs:
                 value=paragraph.text.strip()
-                if value: yield value
+                if value:
+                    yield value
+                    size+=len(value)+1
+                    if size>=MAX_EXTRACTED_CHARS: return
             for table in doc.tables:
                 for row in table.rows:
-                    yield " | ".join(cell.text.strip() for cell in row.cells)
+                    value=" | ".join(cell.text.strip() for cell in row.cells)
+                    if value:
+                        yield value
+                        size+=len(value)+1
+                        if size>=MAX_EXTRACTED_CHARS: return
         return _bounded_join(parts()),meta
     if suffix==".pptx":
         from pptx import Presentation
         presentation=Presentation(io.BytesIO(data))
         def parts():
+            size=0
             for number,slide in enumerate(presentation.slides,1):
                 text=" ".join(shape.text.strip() for shape in slide.shapes if hasattr(shape,"text") and shape.text.strip())
-                if text: yield "[Slide "+str(number)+"] "+text
+                if text:
+                    value="[Slide "+str(number)+"] "+text
+                    yield value
+                    size+=len(value)+1
+                    if size>=MAX_EXTRACTED_CHARS: return
         meta["slide_count"]=len(presentation.slides)
         return _bounded_join(parts()),meta
     if suffix in {".txt",".md"}: return data.decode("utf-8",errors="replace")[:MAX_EXTRACTED_CHARS],meta
     if suffix==".csv":
         def rows():
             reader=csv.reader(io.StringIO(data.decode("utf-8",errors="replace")))
+            size=0
             for row in reader:
-                yield " | ".join(row)
+                value=" | ".join(row)
+                yield value
+                size+=len(value)+1
+                if size>=MAX_EXTRACTED_CHARS: return
         return _bounded_join(rows()),meta
     if suffix==".xlsx":
         from openpyxl import load_workbook
         workbook=load_workbook(io.BytesIO(data),read_only=True,data_only=True)
         def rows():
+            size=0
             for sheet in workbook.worksheets:
-                yield "[Sheet "+sheet.title+"]"
+                value="[Sheet "+sheet.title+"]"
+                yield value
+                size+=len(value)+1
+                if size>=MAX_EXTRACTED_CHARS: return
                 for row in sheet.iter_rows(values_only=True):
                     values=["" if value is None else str(value) for value in row]
-                    if any(values): yield " | ".join(values)
+                    if any(values):
+                        value=" | ".join(values)
+                        yield value
+                        size+=len(value)+1
+                        if size>=MAX_EXTRACTED_CHARS: return
         try:
             content=_bounded_join(rows())
         finally:
