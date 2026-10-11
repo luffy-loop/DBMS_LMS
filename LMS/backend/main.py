@@ -227,7 +227,7 @@ def login(data: Login, request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=401, detail="Invalid roll number or password")
 
         jwt_started = time.perf_counter()
-        token = jwt.encode({"id": user.id, "role": user.role}, key, algorithm=alg)
+        token = jwt.encode({"id": user.id, "role": user.role, "exp": datetime.now(timezone.utc) + timedelta(minutes=30)}, key, algorithm=alg)
         timings["jwt_generation_ms"] = round((time.perf_counter() - jwt_started) * 1000, 2)
 
         audit_started = time.perf_counter()

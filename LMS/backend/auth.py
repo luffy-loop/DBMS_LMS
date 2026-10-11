@@ -31,7 +31,7 @@ def get_user(
         raise HTTPException(status_code=401, detail="Authorization token required")
     jwt_started = time.perf_counter()
     try:
-        data = jwt.decode(creds.credentials, key, algorithms=[alg])
+        data = jwt.decode(creds.credentials, key, algorithms=[alg], options={"require_exp": True})
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
     jwt_ms = round((time.perf_counter() - jwt_started) * 1000, 2)
