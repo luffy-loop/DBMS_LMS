@@ -3,6 +3,7 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
 from datetime import datetime
+import time
 from fastapi.testclient import TestClient
 from jose import jwt
 from sqlalchemy import create_engine
@@ -39,7 +40,7 @@ def test_notification_isolation_and_mark_read():
 
     app.dependency_overrides[get_db] = override_db
     try:
-        token = jwt.encode({"id": first.id, "role": "student"}, key, algorithm=alg)
+        token = jwt.encode({"id": first.id, "role": "student", "exp": int(time.time()) + 300}, key, algorithm=alg)
         headers = {"Authorization": f"Bearer {token}"}
         with TestClient(app) as client:
             listed = client.get("/notifications", headers=headers)
