@@ -13,7 +13,7 @@ from mongodb import mongo_db
 # enabled; local development retains the semantic index by default.
 RESOURCE_VECTOR_SEARCH_ENABLED = os.getenv(
     "ENABLE_RESOURCE_VECTOR_SEARCH",
-    "false" if os.getenv("RENDER") else "true",
+    "false" if (os.getenv("RENDER_GIT_COMMIT") or os.getenv("RENDER")) else "true",
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 if RESOURCE_VECTOR_SEARCH_ENABLED:
