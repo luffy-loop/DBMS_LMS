@@ -193,9 +193,26 @@ export default function TeacherDashboard() {
           </div>
         </div>
 
-        <div className="mt-7 lms-empty rounded-2xl p-6">
-          <p className="font-medium">Course cards are hidden</p>
-          <p className="mt-2 text-sm text-white/40">Use Create course to add a course, or Upload materials to choose an existing course.</p>
+        <div className="mt-7 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {courses.map(course => (
+            <CourseCard
+              key={course.id}
+              course={course}
+              onUpload={() => {
+                setCourseId(String(course.id))
+                setShowUpload(true)
+              }}
+            />
+          ))}
+          {!courses.length && (
+            <div className="lms-empty rounded-2xl p-8 md:col-span-2 xl:col-span-3">
+              <p className="font-medium">No courses yet</p>
+              <p className="mt-2 text-sm text-white/40">Create your first course to get started.</p>
+              <button onClick={() => setShowCourse(true)} className="lms-btn-primary mt-5 rounded-xl px-4 py-3 text-sm">
+                Create your first course
+              </button>
+            </div>
+          )}
         </div>
 
         {showCourse && <Modal title="Create Course" onClose={()=>setShowCourse(false)}>
@@ -237,6 +254,21 @@ export default function TeacherDashboard() {
       </div>
     </section>
   </AppLayout>
+}
+
+function CourseCard({course,onUpload}:{course:Course;onUpload:()=>void}) {
+  return (
+    <div className="lms-card rounded-2xl p-6">
+      <div className="lms-icon flex h-11 w-11 items-center justify-center rounded-xl">
+        <BookOpen size={20}/>
+      </div>
+      <h3 className="mt-5 text-lg font-medium">{course.title}</h3>
+      <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/40">{course.description}</p>
+      <button onClick={onUpload} className="lms-btn-secondary mt-5 rounded-xl px-4 py-2.5 text-sm">
+        <Upload size={15}/>Add materials
+      </button>
+    </div>
+  )
 }
 
 function Stat({icon,label,value}:{icon:React.ReactNode;label:string;value:number}) { return <div className="lms-stat rounded-2xl p-5"><div className="lms-icon mb-4 flex h-10 w-10 items-center justify-center rounded-xl">{icon}</div><p className="text-sm text-white/40">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div> }
