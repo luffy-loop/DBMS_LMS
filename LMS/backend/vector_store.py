@@ -183,7 +183,7 @@ def _lexical_search(query, resources):
 
 
 def search_resources_detailed(query, course_ids=None):
-    normalized = " ".join((query or "").split()).lower()[:SEARCH_CACHE_MAX_QUERY_CHARS]
+    normalized = " ".join(str(query or "")[:SEARCH_CACHE_MAX_QUERY_CHARS * 4].split()).lower()[:SEARCH_CACHE_MAX_QUERY_CHARS]
     ids_key = tuple(sorted(set(course_ids))) if course_ids is not None else None
     cache_key = (normalized, ids_key)
     now = time.monotonic()

@@ -47,6 +47,22 @@ def test_admin_can_create_users_and_assign_roles_without_stale_jwt_privileges():
             assert created.status_code == 201
             teacher_id = created.json()["id"]
             assert created.json()["role"] == "teacher"
+
+            created_admin = client.post(
+                "/admin/users",
+                headers=headers,
+                json={
+                    "name": "Second Administrator",
+                    "roll_no": "ADMIN002",
+                    "password": "another-strong-password",
+                    "role": "admin",
+                },
+            )
+            assert created_admin.status_code == 201
+            assert created_admin.json()["role"] == "admin"
+            admin_account = db.query(User).filter(User.id == created_admin.json()["id"]).one()
+            assert admin_account.password != "another-strong-password"
+            assert admin_account.role == "admin"
             duplicate = client.post("/admin/users", headers=headers, json={"name": "Duplicate", "roll_no": "TEACH001", "password": "strong-password", "role": "teacher"})
             assert duplicate.status_code == 409
             changed = client.patch("/admin/users/2/role", headers=headers, json={"role": "teacher"})

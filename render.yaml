@@ -1,0 +1,28 @@
+services:
+  # This is a persistent queue consumer, not a web service or scheduled cron job.
+  # Sync this Blueprint after confirming the required paid worker compute plan.
+  - type: worker
+    name: dbms-lms-durable-worker
+    runtime: python
+    plan: starter
+    region: oregon
+    repo: https://github.com/luffy-loop/DBMS_LMS
+    branch: main
+    rootDir: LMS/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: RUN_DB_SETUP
+        value: "false"
+      - key: ENABLE_RESOURCE_VECTOR_SEARCH
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: MONGO_URL
+        sync: false
+      - key: MONGODB_DATABASE
+        sync: false
+      - key: JWT_SECRET
+        sync: false
