@@ -1,14 +1,28 @@
+import os
 import re
 import time
 from functools import lru_cache
 
-import chromadb
 from bson import ObjectId
 
 from mongodb import mongo_db
 
-client = chromadb.PersistentClient(path="./vector_data")
-collection = client.get_or_create_collection("lms_resources")
+# Render's free web service has only 512 MiB RAM. Loading Chroma + the local
+# SentenceTransformer model during an upload can exceed that limit and kill
+# the API process. Keep production resource search lexical unless explicitly
+# enabled; local development retains the semantic index by default.
+RESOURCE_VECTOR_SEARCH_ENABLED = os.getenv(
+    "ENABLE_RESOURCE_VECTOR_SEARCH",
+    "false" if (os.getenv("RENDER_GIT_COMMIT") or os.getenv("RENDER")) else "true",
+).strip().lower() in {"1", "true", "yes", "on"}
+
+if RESOURCE_VECTOR_SEARCH_ENABLED:
+    import chromadb
+    client = chromadb.PersistentClient(path="./vector_data")
+    collection = client.get_or_create_collection("lms_resources")
+else:
+    client = None
+    collection = None
 CACHE_TTL = 45
 SEARCH_CACHE_MAX_ENTRIES = 64
 SEARCH_CACHE_MAX_QUERY_CHARS = 300
@@ -35,7 +49,7 @@ def clear_search_cache():
 def prune_orphaned_resource_vectors():
     """Remove indexed material vectors whose source documents no longer exist."""
     global _vectors_reconciled
-    if _vectors_reconciled:
+    if not RESOURCE_VECTOR_SEARCH_ENABLED or _vectors_reconciled:
         return
 
     vector_ids = []
@@ -87,10 +101,13 @@ def prune_orphaned_resource_vectors():
 
 
 def index_resource(item):
+    """Index a resource semantically when enabled; otherwise use lexical search."""
+    if not RESOURCE_VECTOR_SEARCH_ENABLED:
+        return False
     content = item.get("content") or ""
     document = f'{item.get("title", "")}. {content}'.strip()
     if not document:
-        return
+        return False
     collection.upsert(
         ids=[item["id"]],
         documents=[document],
@@ -100,11 +117,13 @@ def index_resource(item):
         }],
         embeddings=[embed_text(document)],
     )
+    return True
 
 
 def remove_resource(resource_id):
     try:
-        collection.delete(ids=[resource_id])
+        if RESOURCE_VECTOR_SEARCH_ENABLED:
+            collection.delete(ids=[resource_id])
     finally:
         clear_search_cache()
 
@@ -164,7 +183,6 @@ def _lexical_search(query, resources):
 
 
 def search_resources_detailed(query, course_ids=None):
-    # Bound cache keys and vector-store query payloads before embedding/searching.
     normalized = " ".join((query or "").split()).lower()[:SEARCH_CACHE_MAX_QUERY_CHARS]
     ids_key = tuple(sorted(set(course_ids))) if course_ids is not None else None
     cache_key = (normalized, ids_key)
@@ -177,6 +195,16 @@ def search_resources_detailed(query, course_ids=None):
     started = time.perf_counter()
     if not normalized:
         return [], metrics
+
+    # Lexical retrieval keeps material search functional without loading a
+    # heavyweight local embedding model into the small production API process.
+    if not RESOURCE_VECTOR_SEARCH_ENABLED:
+        results = _lexical_search(normalized, _resources(ids_key))
+        metrics["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        _cache[cache_key] = (time.monotonic(), results, metrics)
+        if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:
+            _cache.pop(next(iter(_cache)))
+        return results, metrics
 
     prune_orphaned_resource_vectors()
     try:
@@ -224,7 +252,7 @@ def search_resources_detailed(query, course_ids=None):
             metrics["context_build_ms"] = round((time.perf_counter() - t) * 1000, 2)
         metrics["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
         _cache[cache_key] = (time.monotonic(), results, metrics)
-        if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:
+        if len(_cache) > 512:
             _cache.pop(next(iter(_cache)))
         return results, metrics
     except Exception:
