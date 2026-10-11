@@ -63,3 +63,46 @@ Quiz jobs are committed to PostgreSQL before the API returns and are processed b
 ## Semantic search evaluation on approved course material
 
 The default CI check is a synthetic lexical regression check, not proof of semantic retrieval quality. Use the opt-in `tests/performance/search_corpus_evaluation.py` harness with a small, approved corpus exported to JSON. It reports lexical ranking and, when the embedding model is available, dense cosine ranking against instructor-labelled relevant titles. Do not include student data, credentials, or confidential materials in the fixture. Keep production vector search disabled on low-memory instances until cold-start, memory and authorization behavior have been measured.
+
+## Expanded regression and release evidence
+
+The backend test suite also includes instructor-reviewable grading cases for paraphrases, partial answers, irrelevant answers, explicit negation, valid TCP/UDP contrast, and embedding-model outage. These are deterministic regression checks, not a statistically validated accuracy study. Every AI-suggested grade remains subject to the evaluator's review-state rules.
+
+Upload regression checks verify that a teacher cannot upload into another teacher's course, malformed PDF signatures are rejected, invalid idempotency keys are rejected, and an unrelated browser origin is not reflected by CORS.
+
+### Compare search on approved course material
+
+Use an approved, sanitized corpus with relevance labels; do not commit private student information or restricted course documents. The JSON schema is:
+
+```json
+{
+  "source": "approved and sanitized course-material sample",
+  "documents": [
+    {"id": "doc-1", "title": "Database Indexing", "content": "Sanitized extracted content", "course_id": 101}
+  ],
+  "queries": [
+    {"query": "How does an index make database lookup faster?", "relevant_titles": ["Database Indexing"]}
+  ]
+}
+```
+
+Run from `LMS/backend`:
+
+```bash
+python tests/performance/search_corpus_evaluation.py --corpus /secure/path/course-search-corpus.json --output verification-results/course-search-comparison.json
+```
+
+The report compares lexical ranking with dense-embedding cosine ranking using Hit@1 and mean reciprocal rank. If the embedding model cannot load, the report marks semantic evaluation unavailable instead of fabricating semantic scores. Replace the example query/document with real, approved material and teacher-reviewed relevance labels before using the numbers as project evidence.
+
+### Authenticated application performance
+
+For concurrent, read-only requests, use the existing HTTP benchmark with a short-lived token for a dedicated test account. Example:
+
+```bash
+python tests/performance/benchmark.py --base-url "$LMS_BENCHMARK_BASE_URL" --path /profile --path /my-courses --requests 60 --concurrency 3 --timeout 20 --token "$LMS_TEST_TOKEN" --output verification-results/authenticated-read-benchmark.json
+```
+
+For a complete mutating workflow, run `python tests/performance/workflow_benchmark.py` only against a dedicated test deployment with dedicated teacher/student credentials in environment variables. It creates a disposable course, resource, assignment, submission, and published mark. Review and remove that test data after the run. Never run the write workflow against real users or production course data.
+
+The worker entry point is `LMS/backend/worker.py`; Docker Compose defines it as a separate service. Production must also run a separate long-lived worker with the same PostgreSQL and MongoDB configuration. A successful API health check alone does not prove that the worker is running or recovering queued work.
+
