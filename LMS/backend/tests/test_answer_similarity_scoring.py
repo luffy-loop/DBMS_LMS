@@ -344,3 +344,29 @@ def test_unrelated_short_answer_is_classified_without_model_fallback():
     question_reference = "STM32CubeIDE is software used to write, compile, debug, and run programs on STM32 microcontrollers."
     wrong_answer = "PPID (Parent Process ID) is the ID of the process that created another process."
     assert calculate_short_answer_overlap(wrong_answer, question_reference) < 0.15
+
+
+def test_dsa_edit_distance_recognizes_single_character_typo_conservatively():
+    score = es.calculate_edit_distance_score(
+        "A primary key uniquely identifies each row in a database table",
+        "A primary key uniquely identifes each row in a database table",
+    )
+    assert score >= 0.90
+    assert 0.0 <= score <= 1.0
+
+
+def test_dsa_edit_distance_does_not_match_unrelated_concepts():
+    score = es.calculate_edit_distance_score(
+        "A deadlock occurs when processes wait indefinitely for resources",
+        "Photosynthesis converts sunlight into chemical energy",
+    )
+    assert score < 0.20
+
+
+def test_dsa_edit_distance_is_bounded_and_handles_empty_or_long_input():
+    assert es.calculate_edit_distance_score("", "A reference answer") == 0.0
+    score = es.calculate_edit_distance_score(
+        " ".join(["synchronisation"] * 300),
+        " ".join(["synchronization"] * 300),
+    )
+    assert 0.0 <= score <= 1.0
