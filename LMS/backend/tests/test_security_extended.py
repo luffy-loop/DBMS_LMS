@@ -3,6 +3,7 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
 from io import BytesIO
+import time
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
@@ -31,7 +32,7 @@ def install_student_db():
     return engine, db
 
 def make_token(user_id=7, role="student", **extra):
-    return jwt.encode({"id": user_id, "role": role, **extra}, key, algorithm=alg)
+    return jwt.encode({"id": user_id, "role": role, "exp": int(time.time()) + 300, **extra}, key, algorithm=alg)
 
 
 def test_invalid_signature_is_rejected():
