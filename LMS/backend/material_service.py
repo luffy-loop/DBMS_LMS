@@ -76,6 +76,8 @@ def _bounded_join(parts, limit=MAX_EXTRACTED_CHARS):
         piece=("\n" if output else "")+str(part)
         output.append(piece[:remaining])
         size+=min(len(piece),remaining)
+        if size>=limit:
+            break
     return "".join(output)
 
 
