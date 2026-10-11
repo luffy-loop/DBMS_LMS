@@ -916,7 +916,8 @@ def evaluate_hybrid_descriptive(
             # Never use this fallback to override an explicit contradiction.
             lexical_ratio = calculate_lexical_answer_score(clean_ans, crit_text)
             alignment_ratio = calculate_sequence_alignment_score(clean_ans, crit_text)
-            text_evidence_ratio = max(lexical_ratio, alignment_ratio)
+            edit_distance_ratio = calculate_edit_distance_score(clean_ans, crit_text)
+            text_evidence_ratio = max(lexical_ratio, alignment_ratio, edit_distance_ratio)
             if not is_crit_contradicted and text_evidence_ratio >= 0.50:
                 score_ratio = max(score_ratio, text_evidence_ratio)
                 covered = score_ratio >= 0.50
@@ -933,6 +934,7 @@ def evaluate_hybrid_descriptive(
                 "max_marks": crit_max,
                 "semantic_similarity": round(crit_sim, 4),
                 "sequence_alignment_score": alignment_ratio,
+                "edit_distance_score": edit_distance_ratio,
                 "similarity": round(crit_sim, 4),
                 "nli": {
                     "entailment": round(nli_entail, 4),
@@ -987,8 +989,9 @@ def evaluate_hybrid_descriptive(
         # correctly paraphrased answers can receive partial credit.
         lexical_score = calculate_lexical_answer_score(clean_ans, reference_answer or "")
         alignment_score = calculate_sequence_alignment_score(clean_ans, reference_answer or "")
+        edit_distance_score = calculate_edit_distance_score(clean_ans, reference_answer or "")
         semantic_score = calculate_descriptive_marks(overall_sim, 1.0, clean_ans)
-        evidence_score = max(float(lexical_score), float(alignment_score), float(semantic_score))
+        evidence_score = max(float(lexical_score), float(alignment_score), float(edit_distance_score), float(semantic_score))
         base_marks = round(evidence_score * float(question_max_marks), 1)
 
         nli_res = classify_nli(premise=reference_answer or "", hypothesis=clean_ans) if reference_answer and not embedding_fallback_used else {"contradiction": 0.0, "entailment": 0.0, "neutral": 1.0}
