@@ -278,6 +278,87 @@ def test_material_upload_idempotency_processing_listing_download_and_authorizati
 
 
 
+
+def test_pdf_docx_and_pptx_uploads_extract_and_download_over_http(monkeypatch):
+    from io import BytesIO
+    from docx import Document
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    def make_pdf(text):
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\\nstream\\n" + stream + b"\\nendstream",
+        ]
+        output = bytearray(b"%PDF-1.4\\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, 1):
+            offsets.append(len(output))
+            output.extend(f"{number} 0 obj\\n".encode("ascii") + obj + b"\\nendobj\\n")
+        xref = len(output)
+        output.extend(f"xref\\n0 {len(objects) + 1}\\n".encode("ascii"))
+        output.extend(b"0000000000 65535 f \\n")
+        for offset in offsets[1:]:
+            output.extend(f"{offset:010d} 00000 n \\n".encode("ascii"))
+        output.extend(
+            f"trailer\\n<< /Size {len(objects) + 1} /Root 1 0 R >>\\nstartxref\\n{xref}\\n%%EOF\\n".encode("ascii")
+        )
+        return bytes(output)
+
+    docx_buffer = BytesIO()
+    doc = Document()
+    doc.add_paragraph("DOCX_EXTRACT_MARKER")
+    doc.save(docx_buffer)
+
+    pptx_buffer = BytesIO()
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1)).text = "PPTX_EXTRACT_MARKER"
+    presentation.save(pptx_buffer)
+
+    samples = [
+        ("notes.pdf", "application/pdf", make_pdf("PDF_EXTRACT_MARKER"), "PDF_EXTRACT_MARKER"),
+        ("notes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docx_buffer.getvalue(), "DOCX_EXTRACT_MARKER"),
+        ("notes.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", pptx_buffer.getvalue(), "PPTX_EXTRACT_MARKER"),
+    ]
+    engine, db, tables, resources = install_database(monkeypatch)
+    try:
+        client = TestClient(main.app)
+        teacher = headers(11, "teacher")
+        student = headers(12, "student")
+        for index, (filename, content_type, payload, marker_text) in enumerate(samples, 1):
+            uploaded = client.post(
+                "/courses/101/resources",
+                headers={**teacher, "Idempotency-Key": f"format-upload-test-{index:03d}"},
+                data={"title": filename},
+                files={"file": (filename, payload, content_type)},
+            )
+            assert uploaded.status_code == 200, f"{filename}: {uploaded.status_code} {uploaded.text}"
+            resource_id = uploaded.json()["id"]
+            assert material_service.prepare_resource(resource_id) is True, filename
+
+            saved = resources.find_one({"_id": ObjectId(resource_id)})
+            assert saved["processing_status"] == "READY", filename
+            assert saved["extraction_status"] == "READY", filename
+            assert marker_text in saved["content"], f"{filename}: extracted text was {saved.get('content')!r}"
+
+            status = client.get(f"/resources/{resource_id}/status", headers=student)
+            assert status.status_code == 200
+            assert status.json()["status"] == "READY"
+            listing = client.get("/courses/101/resources", headers=student)
+            assert listing.status_code == 200
+            assert any(row["id"] == resource_id for row in listing.json())
+            downloaded = client.get(f"/resources/{resource_id}/download", headers=student)
+            assert downloaded.status_code == 200
+            assert downloaded.content == payload
+    finally:
+        close_database(engine, db, tables)
+
+
 def test_upload_rejects_wrong_owner_bad_signature_and_invalid_idempotency_key(monkeypatch):
     engine, db, tables, _ = install_database(monkeypatch)
     try:
