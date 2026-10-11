@@ -82,6 +82,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+    volumes:
+      - vector_data:/app/vector_data
 
 volumes:
   postgres_data:
