@@ -63,49 +63,106 @@ def validate_file(name:str,content_type:str,data:bytes)->str:
     return suffix
 
 
+def _bounded_join(parts, limit=MAX_EXTRACTED_CHARS):
+    """Join extracted text up to a fixed bound."""
+    output=[]
+    size=0
+    for part in parts:
+        if not part:
+            continue
+        remaining=limit-size
+        if remaining<=0:
+            break
+        piece=("\n" if output else "")+str(part)
+        output.append(piece[:remaining])
+        size+=min(len(piece),remaining)
+        if size>=limit:
+            break
+    return "".join(output)
+
+
 def extract_content(data:bytes,suffix:str)->tuple[str,dict]:
     meta={}
     if suffix==".pdf":
         from pypdf import PdfReader
         reader=PdfReader(io.BytesIO(data));parts=[]
+        size=0
         for number,page in enumerate(reader.pages,1):
+            if size>=MAX_EXTRACTED_CHARS:
+                break
             text=page.extract_text() or ""
-            if text.strip():parts.append("[Page "+str(number)+"]\n"+text)
+            if text.strip():
+                part="[Page "+str(number)+"]\n"+text
+                parts.append(part[:MAX_EXTRACTED_CHARS-size])
+                size+=len(parts[-1])
         meta["page_count"]=len(reader.pages)
-        return "\n\n".join(parts)[:MAX_EXTRACTED_CHARS],meta
+        return _bounded_join(parts),meta
     if suffix==".docx":
         from docx import Document
-        doc=Document(io.BytesIO(data));parts=[p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:parts.append(" | ".join(cell.text.strip() for cell in row.cells))
-        return "\n".join(parts)[:MAX_EXTRACTED_CHARS],meta
+        doc=Document(io.BytesIO(data))
+        def parts():
+            size=0
+            for paragraph in doc.paragraphs:
+                value=paragraph.text.strip()
+                if value:
+                    yield value
+                    size+=len(value)+1
+                    if size>=MAX_EXTRACTED_CHARS: return
+            for table in doc.tables:
+                for row in table.rows:
+                    value=" | ".join(cell.text.strip() for cell in row.cells)
+                    if value:
+                        yield value
+                        size+=len(value)+1
+                        if size>=MAX_EXTRACTED_CHARS: return
+        return _bounded_join(parts()),meta
     if suffix==".pptx":
         from pptx import Presentation
-        presentation=Presentation(io.BytesIO(data));parts=[]
-        for number,slide in enumerate(presentation.slides,1):
-            text=" ".join(shape.text.strip() for shape in slide.shapes if hasattr(shape,"text") and shape.text.strip())
-            if text:parts.append("[Slide "+str(number)+"] "+text)
+        presentation=Presentation(io.BytesIO(data))
+        def parts():
+            size=0
+            for number,slide in enumerate(presentation.slides,1):
+                text=" ".join(shape.text.strip() for shape in slide.shapes if hasattr(shape,"text") and shape.text.strip())
+                if text:
+                    value="[Slide "+str(number)+"] "+text
+                    yield value
+                    size+=len(value)+1
+                    if size>=MAX_EXTRACTED_CHARS: return
         meta["slide_count"]=len(presentation.slides)
-        return "\n".join(parts)[:MAX_EXTRACTED_CHARS],meta
+        return _bounded_join(parts()),meta
     if suffix in {".txt",".md"}: return data.decode("utf-8",errors="replace")[:MAX_EXTRACTED_CHARS],meta
     if suffix==".csv":
-        rows=[];reader=csv.reader(io.StringIO(data.decode("utf-8",errors="replace")))
-        for row in reader:
-            rows.append(" | ".join(row))
-            if sum(len(x) for x in rows)>=MAX_EXTRACTED_CHARS:break
-        return "\n".join(rows)[:MAX_EXTRACTED_CHARS],meta
+        def rows():
+            reader=csv.reader(io.StringIO(data.decode("utf-8",errors="replace")))
+            size=0
+            for row in reader:
+                value=" | ".join(row)
+                yield value
+                size+=len(value)+1
+                if size>=MAX_EXTRACTED_CHARS: return
+        return _bounded_join(rows()),meta
     if suffix==".xlsx":
         from openpyxl import load_workbook
-        workbook=load_workbook(io.BytesIO(data),read_only=True,data_only=True);rows=[]
-        for sheet in workbook.worksheets:
-            rows.append("[Sheet "+sheet.title+"]")
-            for row in sheet.iter_rows(values_only=True):
-                values=["" if value is None else str(value) for value in row]
-                if any(values):rows.append(" | ".join(values))
-                if sum(len(x) for x in rows)>=MAX_EXTRACTED_CHARS:break
-            if sum(len(x) for x in rows)>=MAX_EXTRACTED_CHARS:break
-        workbook.close()
-        return "\n".join(rows)[:MAX_EXTRACTED_CHARS],meta
+        workbook=load_workbook(io.BytesIO(data),read_only=True,data_only=True)
+        def rows():
+            size=0
+            for sheet in workbook.worksheets:
+                value="[Sheet "+sheet.title+"]"
+                yield value
+                size+=len(value)+1
+                if size>=MAX_EXTRACTED_CHARS: return
+                for row in sheet.iter_rows(values_only=True):
+                    values=["" if value is None else str(value) for value in row]
+                    if any(values):
+                        value=" | ".join(values)
+                        yield value
+                        size+=len(value)+1
+                        if size>=MAX_EXTRACTED_CHARS: return
+        try:
+            content=_bounded_join(rows())
+        finally:
+            workbook.close()
+        return content,meta
     if suffix in {".png",".jpg",".jpeg",".webp"}:
         try:
             import pytesseract
