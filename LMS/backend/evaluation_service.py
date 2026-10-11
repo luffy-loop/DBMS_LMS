@@ -1035,7 +1035,7 @@ def evaluate_hybrid_descriptive(
         degraded_capabilities.append("natural_language_inference")
 
     eval_dict = {
-        "evaluator_version": "hybrid-v3-review-safe",
+        "evaluator_version": "hybrid-v4-dsa-edit-distance",
         "confidence_basis": "heuristic_evidence_strength_not_calibrated_probability",
         "evaluation_state": "degraded" if degraded_capabilities else "evaluated",
         "degraded_capabilities": degraded_capabilities,
