@@ -1,4 +1,5 @@
 import os
+import time
 os.environ["ENVIRONMENT"] = "test"
 os.environ["RUN_DB_SETUP"] = "false"
 
@@ -31,7 +32,7 @@ def setup_db():
 
 
 def token(user_id=1, role="admin"):
-    return jwt.encode({"id": user_id, "role": role}, key, algorithm=alg)
+    return jwt.encode({"id": user_id, "role": role, "exp": int(time.time()) + 300}, key, algorithm=alg)
 
 
 def test_admin_can_create_users_and_assign_roles_without_stale_jwt_privileges():
