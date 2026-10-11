@@ -131,8 +131,8 @@ def prepare_resource(file_id:str):
         content,metadata=extract_content(resource["file"],resource["extension"])
         if not content.strip() and resource["extension"] not in {".png",".jpg",".jpeg",".webp"}:raise ValueError("No extractable text found")
         mongo_db.resources.update_one({"_id":resource["_id"]},{"$set":{"content":content,"extraction_status":"READY","processing_status":"PROCESSING","indexing_status":"PROCESSING","updated_at":datetime.utcnow(),**metadata}})
-        index_resource({"id":"resource-"+str(resource["_id"]),"title":resource.get("title") or resource.get("filename","Learning material"),"content":content,"type":"resource","course_id":resource["course_id"]})
-        mongo_db.resources.update_one({"_id":resource["_id"]},{"$set":{"processing_status":"READY","indexing_status":"READY","updated_at":datetime.utcnow()}})
+        indexed = index_resource({"id":"resource-"+str(resource["_id"]),"title":resource.get("title") or resource.get("filename","Learning material"),"content":content,"type":"resource","course_id":resource["course_id"]})
+        mongo_db.resources.update_one({"_id":resource["_id"]},{"$set":{"processing_status":"READY","indexing_status":"READY" if indexed else "LEXICAL_ONLY","updated_at":datetime.utcnow()}})
         clear_search_cache()
         return True
     except Exception as exc:
