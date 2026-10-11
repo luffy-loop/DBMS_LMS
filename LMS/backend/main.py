@@ -1737,8 +1737,8 @@ async def add_resources_batch(
 
 
 @app.post("/courses/{course_id}/resources")
-async def add_resource(course_id:int,background_tasks:BackgroundTasks,file:UploadFile=File(...),title:str=Form(""),user=Depends(get_user),db:Session=Depends(get_db)):
-    result=await add_resources_batch(course_id,background_tasks,[file],[title],user,db)
+async def add_resource(course_id:int,background_tasks:BackgroundTasks,file:UploadFile=File(...),title:str=Form(""),user=Depends(get_user),db:Session=Depends(get_db),idempotency_key: str | None = Header(None, alias="Idempotency-Key")):
+    result=await add_resources_batch(course_id,background_tasks,[file],[title],user,db,idempotency_key)
     first=result["files"][0]
     if first.get("status")=="FAILED":
         raise HTTPException(status_code=409 if "Duplicate" in str(first.get("error")) else 400,detail=first.get("error","Upload failed"))
