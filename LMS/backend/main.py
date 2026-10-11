@@ -1654,9 +1654,14 @@ async def add_resources_batch(
             if batch_bytes > max_upload_batch_bytes:
                 raise HTTPException(status_code=413, detail=f"Upload batch exceeds the {max_upload_batch_mb} MB total limit")
 
-            suffix = validate_file(file.filename or "", file.content_type or "", data)
-            title = titles[index] if titles and index < len(titles) else ""
-            meta = build_metadata(file, data, course_id, user["id"], title)
+            # Surface expected validation failures to the caller instead of
+            # disguising malformed files as database/storage outages.
+            try:
+                suffix = validate_file(file.filename or "", file.content_type or "", data)
+                title = titles[index] if titles and index < len(titles) else ""
+                meta = build_metadata(file, data, course_id, user["id"], title)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             meta["active_content_key"] = f"{course_id}:{meta['sha256']}"
             file_key = idempotency_key if len(files) == 1 else None
             if file_key:
