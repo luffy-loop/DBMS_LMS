@@ -8,22 +8,23 @@ This document records how selected ideas from the separate [DSA-A6 repository](h
 
 | DSA-A6 source | Relevant idea | LMS use |
 | --- | --- | --- |
-| [NeedlemanWunsch.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/NeedlemanWunsch.java) | Dynamic programming to align sequences | Inspiration for a token-level alignment signal between student and reference answers |
-| [SmithWaterman.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/SmithWaterman.java) | Local sequence alignment | A useful future comparison point for finding the best-matching part of a longer answer; it is not claimed as the current implementation |
-| [EditDistance.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/EditDistance.java) | Edit operations and string similarity | A possible future signal for spelling variation; it is not claimed as the current scoring implementation |
+| [NeedlemanWunsch.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/NeedlemanWunsch.java) | Dynamic programming to align sequences | Inspiration for the existing token-level alignment signal between student and reference answers |
+| [SmithWaterman.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/SmithWaterman.java) | Local sequence alignment | Next candidate to evaluate for partial-credit matching of a relevant phrase inside a longer answer; not yet integrated |
+| [EditDistance.java](https://github.com/luffy-loop/DSA-A6/blob/main/src/texthack/dynamicprogramming/EditDistance.java) | Edit operations and string similarity | A new bounded token edit-distance signal recognizes narrowly defined spelling variants and is used as supplementary grading evidence |
 
 ## Current implementation
 
 The integration lives in `LMS/backend/evaluation_service.py`, in `calculate_sequence_alignment_score(student_answer, reference_answer)`.
 
-The current helper:
+The current evaluator combines semantic evidence, lexical/synonym coverage, and two DSA-inspired token-level signals: sequence alignment and bounded edit-distance similarity. It:
 - tokenizes and normalizes answer text;
 - canonicalizes selected equivalent phrases and recognizes a limited set of synonyms;
-- uses dynamic programming to find aligned/equivalent tokens;
-- converts the alignment into a bounded overlap-style score;
+- uses dynamic programming to find aligned/equivalent tokens for sequence alignment;
+- computes a bounded token edit-distance score and only treats tokens as typo-equivalent when they are identical, in a configured synonym group, or differ by at most one character for tokens of sufficient length;
+- converts these signals into bounded supplementary text evidence;
 - limits the input token count to avoid unbounded work.
 
-The score is used as supplementary text evidence alongside lexical and semantic signals. At the criterion level, the evaluator exposes `sequence_alignment_score` in its evidence metadata. It must not override an explicit contradiction. It is not a direct Java import, and it is not the same as a full affine-gap Needleman–Wunsch implementation.
+Both DSA scores are used as supplementary text evidence alongside lexical and semantic signals. The edit-distance code caps token count and token length to bound worst-case work. At the criterion level, the evaluator exposes `sequence_alignment_score` in its evidence metadata. It must not override an explicit contradiction. It is not a direct Java import, and it is not the same as a full affine-gap Needleman–Wunsch implementation.
 
 ## Regression coverage
 
