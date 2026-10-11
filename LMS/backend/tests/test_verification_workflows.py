@@ -453,3 +453,40 @@ def test_assignment_submission_grading_publication_and_student_feedback_visibili
         assert own_row["marks_status"] == "published"
     finally:
         close_database(engine, db, tables)
+
+
+
+def test_study_copilot_sources_include_supporting_evidence_and_page_references():
+    from study_copilot import build_answer
+
+    result = {
+        "title": "Database Notes",
+        "type": "resource",
+        "course_id": 101,
+        "distance": 0.12,
+        "content": "[Page 3] A primary key uniquely identifies each row in a database table. "
+                   "[Page 4] A foreign key links records between related tables.",
+    }
+    answer = build_answer("Explain primary key database", [result])
+    assert answer["mode"] == "course materials"
+    assert answer["sources"]
+    source = answer["sources"][0]
+    assert source["title"] == "Database Notes"
+    assert source["course_id"] == 101
+    assert source["page_references"] == [3, 4]
+    assert source["evidence"]
+    assert any("primary key" in snippet.lower() for snippet in source["evidence"])
+
+
+def test_study_copilot_source_metadata_omits_missing_page_references():
+    from study_copilot import _source_payload
+
+    source = _source_payload({
+        "title": "Plain text notes",
+        "type": "resource",
+        "course_id": 101,
+        "distance": 0.2,
+        "content": "A database stores organized information.",
+    }, ["A database stores organized information."])
+    assert "page_references" not in source
+    assert source["evidence"] == ["A database stores organized information."]
