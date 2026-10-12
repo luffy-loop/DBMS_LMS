@@ -74,3 +74,28 @@ def test_temporary_quiz_mode_repeats_grounded_questions_to_fifteen():
     assert {q["id"] for q in questions} == set(range(1, 16))
     assert all(q["answer"] in q["options"] for q in questions)
     assert len({q["question"] for q in questions}) < 15
+
+
+
+def test_subject_question_banks_return_fifteen_unique_valid_questions():
+    from subject_quiz_bank import get_subject_questions
+
+    subjects = {
+        "DBMS": "DBMS",
+        "OS": "OPERATING SYSTEMS AND SYSTEMS PROGRAMMING",
+        "DSA": "DATA STRUCTURES AND ALGORITHMS - 3",
+        "ML": "MACHINE LEARNING",
+        "IoT": "EMBEDDED SYSTEM DESIGN AND IOT",
+        "Distributed": "DATABASE SYSTEMS ENGINEERING AND DISTRIBUTED BACKEND DEVELOPMENT",
+        "Fallback": "Introduction to Marketing",
+    }
+    for name, title in subjects.items():
+        questions = get_subject_questions(title, 15)
+        assert len(questions) == 15, name
+        assert len({q["question"] for q in questions}) == 15, name
+        assert {q["id"] for q in questions} == set(range(1, 16)), name
+        for question in questions:
+            assert len(question["options"]) == 4, (name, question)
+            assert len({option.casefold() for option in question["options"]}) == 4, (name, question)
+            assert question["answer"] in question["options"], (name, question)
+            assert question["source"], (name, question)

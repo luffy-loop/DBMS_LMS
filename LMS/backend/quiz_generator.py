@@ -8,7 +8,8 @@ from auth import get_user
 from database import get_db
 from models import AIJob, Assignment, AssessmentQuestion, AssessmentQuestionOption, Enrollment, Course
 from notification_service import notify_users
-from ai_jobs import create_job
+from ai_jobs import create_job, set_job
+from subject_quiz_bank import get_subject_questions
 
 router = APIRouter(prefix="/quiz", tags=["quiz"])
 
@@ -56,35 +57,23 @@ def _can_access_course(user, course_id, db):
 
 @router.post("/generate")
 def generate_quiz(data: QuizGenerateRequest, user=Depends(get_user), db: Session = Depends(get_db)):
+    """Create an immediately available subject-specific practice quiz."""
     if user["role"] not in {"student", "teacher", "admin"}:
         raise HTTPException(status_code=403, detail="Access denied")
     course = _can_access_course(user, data.course_id, db)
-    stale_before = datetime.utcnow() - timedelta(minutes=5)
-    db.query(AIJob).filter(
-        AIJob.job_type == "quiz",
-        AIJob.status.in_({"RETRIEVING", "GENERATING"}),
-        AIJob.updated_at < stale_before,
-    ).update(
-        {
-            "status": "FAILED",
-            "error": json.dumps({
-                "error": "JOB_STALE",
-                "message": "Generation stopped updating after a process interruption. Retry the request.",
-            }),
-            "updated_at": datetime.utcnow(),
-        },
-        synchronize_session=False,
-    )
-    db.commit()
-    active = db.query(AIJob).filter(AIJob.user_id == user["id"], AIJob.course_id == course.id, AIJob.job_type == "quiz", AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"})).order_by(AIJob.created_at.desc()).first()
-    if active:
-        return {"job_id": active.job_id, "status": active.status, "reused": True}
-    active_count = db.query(AIJob.id).filter(AIJob.job_type == "quiz", AIJob.status.in_({"QUEUED", "RETRIEVING", "GENERATING"})).count()
-    if active_count >= 3:
-        raise HTTPException(status_code=429, detail="Quiz generation is busy. Wait for an active job to finish before retrying.")
-    job = create_job(db, user["id"], course.id, "quiz", {"query": "course material", "question_count": data.question_count})
-    # The committed QUEUED row is consumed by the independent durable worker.
-    return {"job_id": job.job_id, "status": job.status}
+    questions = get_subject_questions(course.title, data.question_count)
+    if len(questions) != data.question_count:
+        raise HTTPException(status_code=500, detail="The subject question bank could not provide the requested number of questions")
+    job = create_job(db, user["id"], course.id, "quiz", {"query": "built-in subject question bank", "question_count": data.question_count})
+    result = {
+        "title": f"{course.title} — Practice Quiz",
+        "course_id": course.id,
+        "questions": questions,
+        "metrics": {"mode": "built-in-subject-bank", "question_count": len(questions)},
+    }
+    if not set_job(db, job, "COMPLETED", result=result):
+        raise HTTPException(status_code=500, detail="Quiz could not be saved")
+    return {"job_id": job.job_id, "status": "COMPLETED", "result": result}
 
 
 @router.get("/jobs/{job_id}")

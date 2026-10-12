@@ -18,6 +18,7 @@ export default function QuizLab() {
   const [status,setStatus]=useState("IDLE")
   const [result,setResult]=useState<JobResult|null>(null)
   const [questions,setQuestions]=useState<Question[]>([])
+  const [practiceAnswers,setPracticeAnswers]=useState<Record<number,string>>({})
   const [error,setError]=useState("")
   const [title,setTitle]=useState("Course Revision Quiz")
   const [description,setDescription]=useState("AI-generated quiz reviewed and published by the teacher.")
@@ -48,10 +49,11 @@ export default function QuizLab() {
 
   async function generate() {
     if(!courseId) {setError("Select a course first");return}
-    setError("");setResult(null);setQuestions([]);setJobId("");setStatus("QUEUED")
+    setError("");setResult(null);setQuestions([]);setPracticeAnswers({});setJobId("");setStatus("QUEUED")
     try {
-      const job=await apiJson<{job_id:string;status:string}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:15})},10000)
+      const job=await apiJson<{job_id:string;status:string;result?:JobResult}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:15})},10000)
       setJobId(job.job_id);setStatus(job.status)
+      if(job.result){setResult(job.result);setQuestions(job.result.questions)}
     } catch(e) {
       setStatus("FAILED");setError(e instanceof Error?e.message:"Unable to start quiz generation")
     }
@@ -89,7 +91,7 @@ export default function QuizLab() {
       <div className="mx-auto max-w-5xl">
         <div className="lms-hero rounded-3xl p-6 sm:p-8 lg:p-10">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div><p className="text-sm font-medium text-violet-300">Grounded assessment generation</p><h2 className="mt-1 text-2xl font-semibold">Generate, review, then publish.</h2><p className="mt-3 max-w-2xl text-sm leading-6 text-white/45">Generation is a persisted job using processed material from the selected course. This deployment drafts extractive, course-grounded questions locally rather than calling an external LLM. Teachers must review the questions before publishing.</p></div>
+            <div><p className="text-sm font-medium text-violet-300">Grounded assessment generation</p><h2 className="mt-1 text-2xl font-semibold">Generate, review, then publish.</h2><p className="mt-3 max-w-2xl text-sm leading-6 text-white/45">Generate 15 subject-specific practice questions immediately. Teachers can review and publish a quiz; enrolled students can take published quizzes from Assignments or use Quiz Lab for practice.</p></div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <select value={courseId} onChange={e=>setCourseId(e.target.value)} className="lms-input min-w-56"><option value="">Select course</option>{courses.map(c=><option key={c.id} value={c.id}>{c.title}</option>)}</select>
               {running ? <button onClick={cancel} className="lms-btn-secondary rounded-xl px-5 py-3 text-sm"><Ban size={16}/>Cancel</button> : <button onClick={generate} disabled={!courseId || publishing} className="lms-btn-primary rounded-xl px-5 py-3 text-sm disabled:opacity-40"><Sparkles size={16}/>{status==="FAILED"?"Retry generation":"Generate quiz"}</button>}
@@ -108,8 +110,9 @@ export default function QuizLab() {
             <div className="flex items-start gap-3"><span className="rounded-full border border-violet-400/15 bg-violet-400/10 px-3 py-1 text-xs text-violet-300">Question {index+1}</span>{role==="teacher"&&<button onClick={()=>removeQuestion(index)} className="ml-auto text-white/30 hover:text-red-300" aria-label={"Remove question "+(index+1)}><Trash2 size={16}/></button>}</div>
             {role==="teacher" ? <input value={q.question} onChange={e=>editQuestion(index,"question",e.target.value)} className="lms-input mt-4"/> : <h4 className="mt-4 font-medium">{q.question}</h4>}
             <p className="mt-4 rounded-xl border border-white/5 bg-white/[.02] p-4 text-sm leading-6 text-white/55">{q.context}</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">{q.options.map((option,optionIndex)=><div key={optionIndex} className="flex items-center gap-2"><input value={option} onChange={e=>{const next=[...q.options];next[optionIndex]=e.target.value;editQuestion(index,"options",next)}} className="lms-input" aria-label={"Question "+(index+1)+" option "+(optionIndex+1)}/>{role==="teacher"&&<button onClick={()=>editQuestion(index,"answer",option)} className={"rounded-lg px-2 py-2 text-xs " + (q.answer===option?"bg-emerald-400/15 text-emerald-300":"text-white/30 hover:text-white")} aria-label={"Set option "+(optionIndex+1)+" as correct"}>✓</button>}</div>)}</div>
-            <p className="mt-3 text-xs text-white/30">Grounded source: {q.source}</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">{q.options.map((option,optionIndex)=><div key={optionIndex} className="flex items-center gap-2">{role==="teacher"?<><input value={option} onChange={e=>{const next=[...q.options];next[optionIndex]=e.target.value;editQuestion(index,"options",next)}} className="lms-input" aria-label={"Question "+(index+1)+" option "+(optionIndex+1)}/><button onClick={()=>editQuestion(index,"answer",option)} className={"rounded-lg px-2 py-2 text-xs " + (q.answer===option?"bg-emerald-400/15 text-emerald-300":"text-white/30 hover:text-white")} aria-label={"Set option "+(optionIndex+1)+" as correct"}>✓</button></>:<button type="button" onClick={()=>setPracticeAnswers(current=>({...current,[q.id]:option}))} className={"lms-input text-left "+(practiceAnswers[q.id]===option?"border-violet-400/60 bg-violet-400/10":"")} aria-label={"Question "+(index+1)+" choose option "+(optionIndex+1)}>{option}</button>}</div>)}
+            {role==="student"&&practiceAnswers[q.id]&&<p className={"mt-3 text-sm "+(practiceAnswers[q.id]===q.answer?"text-emerald-300":"text-amber-200")}>{practiceAnswers[q.id]===q.answer?"Correct!":"Not quite. Correct answer: "+q.answer}</p>}</div>
+            <p className="mt-3 text-xs text-white/30">Question source: {q.source}</p>
           </div>)}
 
           {role==="teacher" && status!=="PUBLISHED" && <div className="lms-card rounded-3xl p-6 sm:p-7">
