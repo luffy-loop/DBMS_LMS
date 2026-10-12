@@ -59,3 +59,18 @@ def test_quiz_generation_supports_explanatory_sentences_without_is_definitions()
     assert all(q["answer"] in q["options"] for q in questions)
     assert all(len(q["options"]) == 4 for q in questions)
     assert all(len({option.casefold() for option in q["options"]}) == 4 for q in questions)
+
+
+
+def test_temporary_quiz_mode_repeats_grounded_questions_to_fifteen():
+    source = {"title": "Database Notes", "content": (
+        "A primary key is a column that uniquely identifies each row in a relational table. "
+        "A foreign key is a column that references a key in another table and maintains referential integrity. "
+        "Normalization is a process that organizes relational data to reduce redundant values and prevent anomalies. "
+        "An index is a data structure that helps locate rows faster for suitable queries in a database."
+    )}
+    questions = _generate_grounded_questions([source], 15)
+    assert len(questions) == 15
+    assert {q["id"] for q in questions} == set(range(1, 16))
+    assert all(q["answer"] in q["options"] for q in questions)
+    assert len({q["question"] for q in questions}) < 15

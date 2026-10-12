@@ -2028,6 +2028,27 @@ def assign_teacher_section(teacher_id: int, section: str, user=Depends(get_user)
     db.commit()
     return {"message": "Teacher section assigned", "teacher_id": teacher.id, "section": teacher.section}
 
+@app.patch("/admin/users/{user_id}/section")
+def update_student_section(user_id: int, data: dict, user=Depends(get_user), db: Session = Depends(get_db)):
+    """Let administrators assign students directly to sections A1-A6."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access only")
+    section = str(data.get("section", "")).strip().upper()
+    if section not in {"A1", "A2", "A3", "A4", "A5", "A6", "UNASSIGNED"}:
+        raise HTTPException(status_code=422, detail="Section must be A1 through A6 or Unassigned")
+    target = db.query(User).filter(User.id == user_id, User.role == "student").first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Student not found")
+    normalized = "Unassigned" if section == "UNASSIGNED" else section
+    if target.section == normalized:
+        return {"id": target.id, "section": target.section, "message": "Section unchanged"}
+    old_section = target.section or "Unassigned"
+    target.section = normalized
+    db.commit()
+    record_audit(db, user["id"], "admin_student_section_changed", "user", target.id, {"from": old_section, "to": normalized})
+    return {"id": target.id, "section": normalized, "message": "Student section updated"}
+
+
 @app.get("/admin/overview")
 def admin_overview(user=Depends(get_user), db: Session = Depends(get_db)):
     if user["role"] != "admin":

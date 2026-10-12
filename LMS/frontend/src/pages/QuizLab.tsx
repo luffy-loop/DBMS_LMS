@@ -50,7 +50,7 @@ export default function QuizLab() {
     if(!courseId) {setError("Select a course first");return}
     setError("");setResult(null);setQuestions([]);setJobId("");setStatus("QUEUED")
     try {
-      const job=await apiJson<{job_id:string;status:string}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:5})},10000)
+      const job=await apiJson<{job_id:string;status:string}>("/quiz/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({course_id:Number(courseId),question_count:15})},10000)
       setJobId(job.job_id);setStatus(job.status)
     } catch(e) {
       setStatus("FAILED");setError(e instanceof Error?e.message:"Unable to start quiz generation")

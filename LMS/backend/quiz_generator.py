@@ -15,7 +15,7 @@ router = APIRouter(prefix="/quiz", tags=["quiz"])
 
 class QuizGenerateRequest(BaseModel):
     course_id: int
-    question_count: int = Field(default=5, ge=1, le=10)
+    question_count: int = Field(default=15, ge=1, le=15)
 
 
 class QuizQuestionPublish(BaseModel):

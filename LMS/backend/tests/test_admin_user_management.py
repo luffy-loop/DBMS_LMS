@@ -43,6 +43,12 @@ def test_admin_can_create_users_and_assign_roles_without_stale_jwt_privileges():
             listed = client.get("/admin/users?page=1&page_size=10", headers=headers)
             assert listed.status_code == 200
             assert listed.json()["total"] == 2
+            assigned = client.patch("/admin/users/2/section", headers=headers, json={"section": "A6"})
+            assert assigned.status_code == 200
+            assert assigned.json()["section"] == "A6"
+            assert db.query(User).filter(User.id == 2).one().section == "A6"
+            invalid_section = client.patch("/admin/users/2/section", headers=headers, json={"section": "A7"})
+            assert invalid_section.status_code == 422
             created = client.post("/admin/users", headers=headers, json={"name": "New Teacher", "roll_no": "TEACH001", "password": "strong-password", "role": "teacher", "section": "A2"})
             assert created.status_code == 201
             teacher_id = created.json()["id"]
