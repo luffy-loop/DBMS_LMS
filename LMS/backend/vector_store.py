@@ -252,7 +252,7 @@ def search_resources_detailed(query, course_ids=None):
             metrics["context_build_ms"] = round((time.perf_counter() - t) * 1000, 2)
         metrics["total_ms"] = round((time.perf_counter() - started) * 1000, 2)
         _cache[cache_key] = (time.monotonic(), results, metrics)
-        if len(_cache) > 512:
+        if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:
             _cache.pop(next(iter(_cache)))
         return results, metrics
     except Exception:

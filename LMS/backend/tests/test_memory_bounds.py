@@ -40,6 +40,7 @@ def test_vector_search_cache_limits_are_explicit():
     assert "SEARCH_CACHE_MAX_ENTRIES = 64" in source
     assert "SEARCH_CACHE_MAX_QUERY_CHARS = 300" in source
     assert "if len(_cache) > SEARCH_CACHE_MAX_ENTRIES:" in source
+    assert "if len(_cache) > 512:" not in source
 
 
 def test_query_normalization_has_a_fixed_input_work_bound():
