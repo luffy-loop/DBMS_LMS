@@ -179,6 +179,28 @@ export default function Marks(){
    setReport(data)
   }else await load()
  }
+ function downloadAdminCsv(){
+  const rows=adminOverview?.students||[]
+  if(!rows.length){setError("There are no student records to export for the selected filters.");return}
+  const headers=["Course","Section","Assessment","Student ID","Student Name","Roll Number","Submission Status","Submitted At","Marks Secured","Maximum Marks","Percentage","Result Visibility","Grading Status","Needs Review"]
+  const cell=(value:unknown)=>{
+   let text=value===null||value===undefined?"":String(value)
+   if(/^[=+@\-\t\r]/.test(text))text="'"+text
+   return '"'+text.replace(/"/g,'""')+'"'
+  }
+  const lines=[headers,...rows.map(row=>[
+   row.course_title,row.section,row.assessment_title,row.student_id,row.student_name,row.student_email,
+   row.submission_status.replaceAll("_"," "),row.submitted_at,
+   row.saved_marks??row.total_marks,row.max_marks,row.percentage===null?"":row.percentage,
+   row.marks_status||"pending",row.grading_status,row.needs_review?"Yes":"No"
+  ])].map(line=>line.map(cell).join(","))
+  const blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8;"})
+  const url=URL.createObjectURL(blob),anchor=document.createElement("a")
+  anchor.href=url
+  anchor.download="student-marks-report"+(adminCourse?"-course-"+adminCourse:"")+(adminSection?"-section-"+adminSection.replace(/[^a-z0-9_-]/gi,"-"):"")+(adminAssessment?"-assessment-"+adminAssessment:"")+"-"+new Date().toISOString().slice(0,10)+".csv"
+  document.body.appendChild(anchor);anchor.click();anchor.remove()
+  window.setTimeout(()=>URL.revokeObjectURL(url),1000)
+ }
  const filtered=report?.students.filter(student=>{
   const status=student.review_status||student.grading_status
   return (filter==="all"||status===filter)&&((student.student_name+" "+student.student_email+" "+student.student_id).toLowerCase().includes(search.toLowerCase()))
@@ -188,7 +210,7 @@ export default function Marks(){
   <section className="lms-grid min-h-[calc(100vh-76px)] p-4 sm:p-6 lg:p-10"><div className="mx-auto max-w-7xl">
    {error&&<div role="alert" className="mb-5 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-300">{error}</div>}
    {message&&<div role="status" className="mb-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-300">{message}</div>}
-   <div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-xl font-semibold">{role==="teacher"?"Class-wide grading":role==="admin"?"Section-wise marks overview":"My results"}</h2><p className="mt-1 text-sm text-white/40">{loading?"Loading assessment data…":role==="teacher"?"Review every enrolled student, including students who have not submitted.":role==="admin"?(adminOverview?.students.length||0)+" matching student records":items.length+" record"+(items.length===1?"":"s")}</p></div><button onClick={()=>role==="teacher"?refreshReport():role==="admin"?setAdminRefresh(current=>current+1):load()} className="lms-btn-secondary rounded-xl px-3 py-2 text-sm"><RefreshCw size={15}/>Refresh</button></div>
+   <div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-xl font-semibold">{role==="teacher"?"Class-wide grading":role==="admin"?"Section-wise marks overview":"My results"}</h2><p className="mt-1 text-sm text-white/40">{loading?"Loading assessment data…":role==="teacher"?"Review every enrolled student, including students who have not submitted.":role==="admin"?(adminOverview?.students.length||0)+" matching student records":items.length+" record"+(items.length===1?"":"s")}</p></div><div className="flex flex-wrap gap-2">{role==="admin"&&<button onClick={downloadAdminCsv} disabled={loading||!adminOverview?.students.length} className="lms-btn-primary rounded-xl px-4 py-2 text-sm disabled:opacity-40"><FileDown size={16}/>Export marks CSV</button>}<button onClick={()=>role==="teacher"?refreshReport():role==="admin"?setAdminRefresh(current=>current+1):load()} className="lms-btn-secondary rounded-xl px-3 py-2 text-sm"><RefreshCw size={15}/>Refresh</button></div></div>
 
    {role==="admin"?<>
     <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
