@@ -1,4 +1,4 @@
-import { BookOpen, LayoutDashboard, BookOpenText, ClipboardList, Award, Search, BrainCircuit, Sparkles, Route, BarChart3, UserRound, LogOut, Menu, X, Users, Activity, FileText } from "lucide-react"
+import { BookOpen, LayoutDashboard, BookOpenText, ClipboardList, Award, Search, BrainCircuit, Sparkles, Route, BarChart3, UserRound, LogOut, Menu, X, Users, Activity, FileText, Sun, Moon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import NotificationBell from "./NotificationBell"
@@ -14,6 +14,13 @@ export default function AppLayout({ children, title, subtitle, roleOverride }: {
   const name=sessionStorage.getItem("name") || "User"
   const [menuOpen,setMenuOpen]=useState(false)
   const [accountOpen,setAccountOpen]=useState(false)
+  const [theme,setTheme]=useState<"dark"|"light">(()=>localStorage.getItem("lms-theme")==="light"?"light":"dark")
+
+  useEffect(()=>{
+    document.documentElement.dataset.theme=theme
+    localStorage.setItem("lms-theme",theme)
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content",theme==="light"?"#f8fafc":"#070b14")
+  },[theme])
 
   const dashboard=role==="teacher"?"/teacher":role==="admin"?"/admin":"/dashboard"
   const items:NavItem[]=role==="admin"?[
@@ -67,6 +74,7 @@ export default function AppLayout({ children, title, subtitle, roleOverride }: {
         <div className="min-w-0"><p className="truncate text-xs text-white/35">{subtitle||"Learning Platform"}</p>{title&&<h1 className="truncate text-xl font-semibold sm:text-2xl">{title}</h1>}</div>
         <div className="relative flex items-center gap-2 sm:gap-3">
           <span className="hidden max-w-40 truncate text-sm text-white/40 sm:block">{name}</span>
+          <button type="button" onClick={()=>setTheme(current=>current==="dark"?"light":"dark")} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 transition hover:bg-white/10" aria-label={theme==="dark"?"Switch to light mode":"Switch to dark mode"} title={theme==="dark"?"Switch to light mode":"Switch to dark mode"}>{theme==="dark"?<Sun size={17}/>:<Moon size={17}/>}</button>
           <NotificationBell/>
           <button onClick={()=>setAccountOpen(v=>!v)} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5" aria-haspopup="menu" aria-expanded={accountOpen} aria-label="Open account menu"><UserRound size={17}/></button>
           <button onClick={()=>setMenuOpen(v=>!v)} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 lg:hidden" aria-label={menuOpen?"Close navigation menu":"Open navigation menu"}>{menuOpen?<X size={18}/>:<Menu size={18}/>}</button>
