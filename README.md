@@ -117,35 +117,59 @@ Admin    -> admin workflows
 
 Protected endpoints validate the authenticated user's role before allowing access to role-specific operations.
 
-## Tech Stack
+## Technologies Used
 
 ### Frontend
-- React 19
-- TypeScript
-- Vite
-- React Router
-- Tailwind CSS
-- Motion
-- Lucide React
+- **React 19** — component-based user interface
+- **TypeScript** — static typing for frontend code
+- **Vite** — frontend development server and build tool
+- **React Router 7** — client-side routing
+- **Tailwind CSS 4** — utility-first styling
+- **Motion** — UI animations
+- **Lucide React** — icons
+- **Oxlint** — frontend linting
 
 ### Backend
-- Python
-- FastAPI
-- SQLAlchemy
-- Uvicorn
-- JWT authentication
-- Passlib password hashing
+- **Python** — backend application language
+- **FastAPI** — REST API framework
+- **Uvicorn** — ASGI server
+- **SQLAlchemy** — relational database ORM and connection pooling
+- **Alembic** — database schema migrations
+- **Pydantic / FastAPI validation** — request and response validation
+- **python-jose** — JWT handling
+- **Passlib** — password hashing
+- **python-dotenv** — environment configuration
+- **PyMongo** — MongoDB integration
+- **python-multipart** — file upload handling
 
-### Databases & AI
-- PostgreSQL
-- MongoDB
-- ChromaDB
-- Sentence Transformers
-- PyPDF
+### Databases and Search
+- **PostgreSQL 16** — structured relational LMS data
+- **pgvector** — vector storage and similarity search support in PostgreSQL
+- **MongoDB 7** — document-oriented learning resources and uploaded content
+- **ChromaDB** — vector database for semantic retrieval
+- **Sentence Transformers** — text embeddings for semantic search
 
-### Deployment
-- Vercel frontend
-- Render Python backend
+### AI, Documents, and File Processing
+- **PyPDF** — PDF text extraction
+- **python-docx** — DOCX document processing
+- **python-pptx** — PowerPoint document processing
+- **openpyxl** — XLSX spreadsheet processing
+- **Pillow** — image processing
+- **pytesseract** — OCR integration for supported image/document workflows
+- **NumPy / model dependencies** — numerical operations and support for embedding models, where installed transitively
+
+### Testing and API Tools
+- **pytest** — backend automated tests
+- **Postman** — API collection and environment for endpoint testing
+- **GitHub Actions** — automated backend checks in CI
+
+### DevOps and Deployment
+- **Docker** — containerized backend environment
+- **Docker Compose** — local orchestration for backend, PostgreSQL, MongoDB, and worker
+- **Vercel** — frontend deployment
+- **Render** — hosted FastAPI backend
+- **npm** — frontend dependency management and scripts
+- **Git and GitHub** — version control and source hosting
 
 ## Project Structure
 
@@ -417,4 +441,3 @@ The LMS grading engine applies ideas from the separate [DSA-A6 coursework reposi
 - **Limitations:** synonym rules and token alignment are heuristic signals, not a calibrated measure of correctness. Grading remains reviewable, and production suitability requires broader subject-specific test sets and educator validation.
 
 See [the integration notes](docs/dsa-algorithm-integration.md) for the algorithm mapping, design choices, and validation boundaries.
-
