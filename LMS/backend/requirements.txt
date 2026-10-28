@@ -1,3 +1,5 @@
+# Pin the runtime to a tested Python release in Render; use the same version in CI.
+# Keep this file lightweight enough for the free API service.
 fastapi
 uvicorn
 sqlalchemy
