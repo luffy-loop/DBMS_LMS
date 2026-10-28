@@ -1,5 +1,4 @@
-# Pin the runtime to a tested Python release in Render; use the same version in CI.
-# Keep this file lightweight enough for the free API service.
+# Runtime is pinned to Python 3.11 in .python-version and GitHub Actions.
 fastapi
 uvicorn
 sqlalchemy
