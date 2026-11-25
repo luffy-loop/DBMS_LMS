@@ -167,6 +167,7 @@ def _generate_grounded_questions(results, count):
         return []
 
     questions = []
+    seen_questions = set()
     for item in concepts:
         correct_tokens = set(re.findall(r"[a-z]{3,}", item["definition"].casefold()))
         ranked = []
@@ -193,9 +194,13 @@ def _generate_grounded_questions(results, count):
         options = [item["term"]] + [other["term"] for other in distractors]
         if len({option.casefold() for option in options}) != 4:
             continue
+        question = "Which concept matches this description: " + item["definition"].rstrip(".!?") + "?"
+        if question.casefold() in seen_questions:
+            continue
+        seen_questions.add(question.casefold())
         questions.append({
             "id": len(questions) + 1,
-            "question": "Which concept matches this description: " + item["definition"].rstrip(".!?") + "?",
+            "question": question,
             "context": "Source material: " + item["source"],
             "options": options,
             "answer": item["term"],
@@ -206,14 +211,4 @@ def _generate_grounded_questions(results, count):
         })
         if len(questions) >= count:
             break
-    # Temporary assessment mode: reuse course-grounded questions to fill 15 slots
-    # when the material yields fewer unique concepts. Keep answers and options paired.
-    if questions:
-        original_questions = list(questions)
-        while len(questions) < count:
-            template = original_questions[(len(questions) - len(original_questions)) % len(original_questions)]
-            repeated = dict(template)
-            repeated["id"] = len(questions) + 1
-            repeated["context"] = template["context"] + " (temporary repeated question)"
-            questions.append(repeated)
     return questions

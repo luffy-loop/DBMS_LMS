@@ -62,7 +62,7 @@ def test_quiz_generation_supports_explanatory_sentences_without_is_definitions()
 
 
 
-def test_temporary_quiz_mode_repeats_grounded_questions_to_fifteen():
+def test_grounded_quiz_returns_only_available_unique_questions():
     source = {"title": "Database Notes", "content": (
         "A primary key is a column that uniquely identifies each row in a relational table. "
         "A foreign key is a column that references a key in another table and maintains referential integrity. "
@@ -70,10 +70,10 @@ def test_temporary_quiz_mode_repeats_grounded_questions_to_fifteen():
         "An index is a data structure that helps locate rows faster for suitable queries in a database."
     )}
     questions = _generate_grounded_questions([source], 15)
-    assert len(questions) == 15
-    assert {q["id"] for q in questions} == set(range(1, 16))
+    assert len(questions) == 4
+    assert {q["id"] for q in questions} == set(range(1, 5))
     assert all(q["answer"] in q["options"] for q in questions)
-    assert len({q["question"] for q in questions}) < 15
+    assert len({q["question"].casefold() for q in questions}) == len(questions)
 
 
 
